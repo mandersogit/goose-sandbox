@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+import sandboxed_goose.live_test as live_test
 from sandboxed_goose.contextfs.goose_session import (
     MESSAGE_PATH_PREFIX,
     project_goose_session,
@@ -25,6 +26,86 @@ from sandboxed_goose.live_test import (
 
 VISIBLE = json.dumps({"userVisible": True, "agentVisible": True})
 TOOL_NAME = "sandboxed-goose-mcp-sdk__session_context"
+
+
+def _provenance_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
+    goose_bin = tmp_path / "bin" / "goose"
+    goose_bin.parent.mkdir()
+    goose_bin.write_text("#!/bin/sh\nprintf 'goose 1.45.0\\n'\n")
+    goose_bin.chmod(0o755)
+
+    adapter = tmp_path / "local.venv" / "bin" / "sandboxed-goose-mcp-sdk"
+    adapter.parent.mkdir(parents=True)
+    adapter.write_text("#!/bin/sh\nexit 0\n")
+    adapter.chmod(0o755)
+
+    goose_source = tmp_path / "stock-goose"
+    goose_source.mkdir()
+    return goose_bin, adapter, goose_source
+
+
+def test_live_provenance_accepts_clean_stock_goose_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    goose_bin, _, goose_source = _provenance_fixture(tmp_path)
+    project_root = tmp_path.resolve()
+    source_root = goose_source.resolve()
+
+    def fake_git_capture(arguments: list[str], cwd: Path) -> str:
+        if cwd == source_root:
+            if arguments[-1] == "--is-inside-work-tree":
+                return "true"
+            if arguments[-1] == "--porcelain":
+                return ""
+            return "stock-goose-commit"
+        if cwd == project_root:
+            return "project-commit" if arguments[-1] == "HEAD" else " M README.md"
+        raise AssertionError((arguments, cwd))
+
+    monkeypatch.setattr(live_test, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(live_test, "_git_capture", fake_git_capture)
+
+    provenance = live_test._provenance(
+        goose_bin=goose_bin,
+        goose_source=goose_source,
+        adapter="mcp-sdk",
+        probe_root=tmp_path / "probe",
+    )
+
+    assert provenance["goose_runtime_contract"] == "stock-unmodified"
+    assert provenance["goose_commit"] == "stock-goose-commit"
+    assert provenance["goose_status"] == ""
+    assert provenance["goose_source_clean"] is True
+
+
+def test_live_provenance_rejects_modified_goose_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    goose_bin, _, goose_source = _provenance_fixture(tmp_path)
+    project_root = tmp_path.resolve()
+    source_root = goose_source.resolve()
+
+    def fake_git_capture(arguments: list[str], cwd: Path) -> str:
+        if cwd == source_root:
+            if arguments[-1] == "--is-inside-work-tree":
+                return "true"
+            if arguments[-1] == "--porcelain":
+                return " M crates/goose/src/context_mgmt/mod.rs"
+            return "stock-goose-commit"
+        if cwd == project_root:
+            return "project-commit" if arguments[-1] == "HEAD" else ""
+        raise AssertionError((arguments, cwd))
+
+    monkeypatch.setattr(live_test, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(live_test, "_git_capture", fake_git_capture)
+
+    with pytest.raises(LiveTestError, match="clean, unmodified Goose checkout"):
+        live_test._provenance(
+            goose_bin=goose_bin,
+            goose_source=goose_source,
+            adapter="mcp-sdk",
+            probe_root=tmp_path / "probe",
+        )
 
 
 def test_live_environment_force_disables_goose_tool_pair_summarization(tmp_path: Path) -> None:

@@ -228,8 +228,8 @@ def project_goose_session(
         },
         "disclosure": {
             "rows": (
-                "rows currently marked agentVisible or explicitly marked by patched Goose "
-                "as historicallyAgentVisible"
+                "rows currently marked agentVisible, plus rows carrying explicit "
+                "historicallyAgentVisible prior-disclosure provenance when available"
             ),
             "audience": "only unscoped or assistant-audience content blocks",
             "excluded": [

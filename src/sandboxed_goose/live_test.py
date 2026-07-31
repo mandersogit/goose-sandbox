@@ -40,9 +40,6 @@ DEFAULT_CONTEXT_IMAGE: Final = (
 DEFAULT_RUNTIME_CONFIG: Final = (
     PROJECT_ROOT / "containers" / "apptainer" / "apptainer-hostile-context.conf"
 )
-GOOSE_PATCH: Final = (
-    PROJECT_ROOT / "patches" / "goose" / "0001-preserve-agent-visible-history-provenance.patch"
-)
 SCHEMA_VERSION: Final = 1
 MAX_HTTP_RESPONSE: Final = 16 * 1024 * 1024
 MAX_CAPTURE_BYTES: Final = 8 * 1024 * 1024
@@ -397,6 +394,7 @@ def _provenance(
     if version.returncode != 0:
         raise LiveTestError(f"cannot query Goose version: {version.stderr.strip()}")
     result: dict[str, object] = {
+        "goose_runtime_contract": "stock-unmodified",
         "project_commit": _git_capture(["git", "rev-parse", "HEAD"], PROJECT_ROOT),
         "project_status": _git_capture(["git", "status", "--porcelain"], PROJECT_ROOT),
         "goose_binary": str(goose_bin),
@@ -407,33 +405,35 @@ def _provenance(
         "adapter_entry_point_sha256": _sha256(extension),
     }
     if goose_source is not None:
-        source = goose_source.expanduser().resolve(strict=True)
-        if not (source / ".git").exists():
+        try:
+            source = goose_source.expanduser().resolve(strict=True)
+        except OSError as error:
+            raise LiveTestError(f"--goose-source is unavailable: {goose_source}") from error
+        if _git_capture(["git", "rev-parse", "--is-inside-work-tree"], source) != "true":
             raise LiveTestError(f"--goose-source is not a Git worktree: {source}")
-        patch = _require_file(GOOSE_PATCH, "Goose history-provenance patch")
-        check = subprocess.run(
-            ["git", "-C", str(source), "apply", "--reverse", "--check", str(patch)],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-        if check.returncode != 0:
+        source_status = _git_capture(["git", "status", "--porcelain"], source)
+        if source_status:
             raise LiveTestError(
-                "the configured Goose source does not reverse-check with the required "
-                f"history-provenance patch: {check.stderr.strip()}"
+                "--goose-source must be a clean, unmodified Goose checkout for the "
+                "supported runtime contract"
             )
         result.update(
             {
                 "goose_source": str(source),
                 "goose_commit": _git_capture(["git", "rev-parse", "HEAD"], source),
-                "goose_status": _git_capture(["git", "status", "--porcelain"], source),
-                "history_provenance_patch_applied": True,
+                "goose_status": source_status,
+                "goose_source_clean": True,
             }
         )
     else:
-        result["history_provenance_patch_applied"] = None
+        result.update(
+            {
+                "goose_source": None,
+                "goose_commit": None,
+                "goose_status": None,
+                "goose_source_clean": None,
+            }
+        )
     return result
 
 
@@ -1781,7 +1781,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     initial.add_argument("--ollama-host")
     initial.add_argument("--model")
     initial.add_argument("--goose-bin", type=Path)
-    initial.add_argument("--goose-source", type=Path)
+    initial.add_argument(
+        "--goose-source",
+        type=Path,
+        help="optional clean, unmodified Goose checkout recorded as source provenance",
+    )
     initial.add_argument("--adapter", choices=("mcp-sdk", "fastmcp"), default="mcp-sdk")
     initial.add_argument("--turns", type=int, default=10)
     initial.add_argument("--turn-timeout", type=int, default=600)
