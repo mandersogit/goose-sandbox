@@ -65,6 +65,9 @@ Goose is launched with `--no-profile` and exactly one `--with-extension` argumen
 - A trusted host exporter materializes one mode-`0600` session-scoped bundle for each
   generation. Apptainer binds only that bundle read-only at a fixed in-image path; the
   Goose database and unrelated sessions never enter the container.
+- The opt-in `apptainer-fuse` implementation of `session_context` regenerates that
+  bundle for every bounded read and invokes only a fixed in-image reader. The reader
+  verifies `/context` is FUSE-backed before using ordinary filesystem operations.
 - Backend and workspace selection enter through environment variables so the stdio command stays simple.
 - The Goose CLI remains an independently installed integration dependency rather than
   vendored project content.

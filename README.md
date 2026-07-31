@@ -39,6 +39,7 @@ The installed entry points are:
 sandboxed-goose-mcp-sdk
 sandboxed-goose-fastmcp
 sandboxed-goose-contextfs  # image-only dependencies; not an MCP tool
+sandboxed-goose-read-context  # fixed image-only reader; not an MCP tool
 sandboxed-goose-export-session  # trusted host-side snapshot exporter
 ```
 
@@ -107,7 +108,7 @@ You can also select an adapter when calling the wrapper directly:
 SANDBOXED_GOOSE_MCP_IMPLEMENTATION=fastmcp ./scripts/goose.sh session
 ```
 
-## Reserved configuration
+## Configuration
 
 These environment variables are parsed now so the eventual backend contract has a stable configuration seam:
 
@@ -115,8 +116,19 @@ These environment variables are parsed now so the eventual backend contract has 
 - `SANDBOXED_GOOSE_WORKSPACE`: workspace path that would be exposed inside the sandbox
 - `SANDBOXED_GOOSE_SESSION_DATABASE`: optional explicit Goose `sessions.db` path;
   otherwise it is derived from `GOOSE_PATH_ROOT`
+- `SANDBOXED_GOOSE_SESSION_CONTEXT_TRANSPORT`: `direct` (the default) or the
+  opt-in `apptainer-fuse` transport
+- `SANDBOXED_GOOSE_CONTEXT_IMAGE`: immutable context-enabled SIF used by the
+  FUSE transport
+- `SANDBOXED_GOOSE_APPTAINER_CONFIG`: context-enabled Apptainer runtime policy
+- `SANDBOXED_GOOSE_APPTAINER_STATE`: private mode-`0700` cache, temporary, and
+  per-read state root
+- `APPTAINER`: optional Apptainer executable override
 
-Setting them does not enable execution in the scaffold.
+The context transport enables only bounded reads of an already approved projection.
+It does not enable general filesystem access or command execution. The Goose wrapper
+supplies project-local image, policy, and state defaults when `apptainer-fuse` is
+selected.
 
 ## Security invariant
 
@@ -142,8 +154,39 @@ The projection deliberately excludes rows without agent-disclosure provenance,
 audience-scoped user content, thinking blocks, binary payloads, provider metadata, MCP
 `_meta`, usage, cost, configuration, and all other sessions. `session_context` lets the
 agent list or read the same virtual files before the general sandboxed read/Bash tools
-exist. Build the image with `make apptainer-context-image` and rerun both toy and
-session checks with `make test-apptainer-contextfs`.
+exist. Its default `direct` transport renders in the MCP process. The opt-in
+`apptainer-fuse` transport exports a fresh bundle per call, starts the fixed reader in
+the hardened context image, requires that `/context` is a real FUSE mount, and returns
+only the bounded reader envelope. Build the image with `make apptainer-context-image`
+and rerun the toy and synthetic-session checks with `make test-apptainer-contextfs`.
+
+An opt-in real-session suite can use a durable fixture created by the real Goose CLI
+against a deterministic loopback provider:
+
+```bash
+local.venv/bin/python scripts/create-goose-session-fixture.py \
+  --goose-bin /path/to/goose \
+  --goose-root /private/test/goose \
+  --output /private/test/fixture.json \
+  --turns 12
+SANDBOXED_GOOSE_REAL_SESSION_FIXTURE=/private/test/fixture.json \
+  make test-real-session-contextfs
+```
+
+The suite checks both MCP adapters and then resumes the selected Goose session through
+each adapter so Goose itself supplies the session binding. It uses no live inference
+service.
+
+To inspect an exact fixture session manually through the same Apptainer/FUSE mount:
+
+```bash
+scripts/shell-apptainer-session-context.sh \
+  --fixture /private/test/fixture.json
+```
+
+The script opens an offline interactive Bash shell with the session at `/context` and
+removes its private projection bundle when the shell exits. It also accepts an explicit
+`--database PATH --session-id ID` pair.
 
 Goose needs the repository's small provenance patch to preserve model-visible rows
 when compaction or tool-pair summarization archives them. Apply it to a Goose checkout

@@ -469,7 +469,7 @@ retroactively identify messages compacted before the marker was recorded.
 The current context-enabled SIF has SHA-256:
 
 ```text
-73f5cbd46e26b39a81f5e67ba15bbb55a08ad43190bac776d60b699a6c566f18
+23f56c3ca325e3eef1d1415b6cfbc4d3999ea6ebd580459b43ba8b92ad21b1e4
 ```
 
 The integration check exercises both modes. It verifies content hashes, failed
@@ -506,9 +506,12 @@ Do not implement a timeout by killing only a shell wrapper around Apptainer. An
 exploratory interruption did not clean up the entire runtime tree and orphaned the SIF
 reader until it was explicitly terminated. The future trusted supervisor must own the
 full process/cgroup lifecycle and retain a tested escalation path. The projection is
-not yet wired to a general Bash tool. The same virtual files are available through the
-narrow `session_context` MCP list/read tool in both adapters, which proves the Goose
-request-to-session binding without granting shell execution.
+not wired to a general Bash tool. The narrow `session_context` MCP list/read tool
+supports an opt-in `apptainer-fuse` transport in both adapters. Each call creates a
+fresh private bundle, launches the fixed in-image reader, and refuses to return data
+unless `/context` is an actual FUSE mount in that container namespace. A durable
+12-turn session created by the real Goose CLI has been read through this path,
+including real Goose resume and metadata injection, without granting shell execution.
 
 ## Assessment
 

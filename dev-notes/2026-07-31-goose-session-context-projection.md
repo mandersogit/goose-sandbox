@@ -141,13 +141,15 @@ retain it. The patched portable Goose CLI builds successfully.
 The rebuilt context-enabled SIF is mode `0444` with SHA-256:
 
 ```text
-73f5cbd46e26b39a81f5e67ba15bbb55a08ad43190bac776d60b699a6c566f18
+23f56c3ca325e3eef1d1415b6cfbc4d3999ea6ebd580459b43ba8b92ad21b1e4
 ```
 
-An inference-backed test is not necessary for session-binding assurance: the local
-mock-provider test exercises the real Goose session manager, database, stdio MCP
-transport, metadata injection, both Python adapters, and tool response persistence
-without sending any session material to an external model endpoint.
+The opt-in `apptainer-fuse` transport is now also covered with a durable 12-turn
+session created and resumed by the real Goose CLI. A local mock-provider test exercises
+the real Goose session manager, database, stdio MCP transport, metadata injection,
+both Python adapters, fresh Apptainer launches, the actual `/context` FUSE mount, and
+tool response persistence without sending session material to an external model
+endpoint. The separate live-inference test remains postponed.
 
 ## Remaining boundary
 
