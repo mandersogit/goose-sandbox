@@ -2,8 +2,10 @@
 
 This note records the controls relevant to reproducible, sandboxed Goose CLI runs.
 It is based on the local Goose reference working tree at
-`ee61c7c499dbf08786a75948d949639cbab14150`, with this project's
-history-provenance patch applied. Source paths below are relative to that Goose tree.
+`ee61c7c499dbf08786a75948d949639cbab14150`. A history-provenance experiment happened
+to be applied during the original source review, but it does not define any control in
+this policy and is not a runtime prerequisite. The supported contract is stock,
+unmodified Goose. Source paths below are relative to the pinned Goose tree.
 
 The main recommendation is to launch Goose from a small, constructed environment,
 not the caller's complete environment. A few Goose defaults are actively unsuitable

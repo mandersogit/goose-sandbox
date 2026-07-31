@@ -1,5 +1,12 @@
 # Live session-context driver
 
+> **Current contract:** The successful run recorded below used the earlier optional
+> provenance-patch experiment. New supported runs use stock, unmodified Goose and
+> force tool-pair summarization off. The driver's optional `--goose-source` input now
+> records only a clean stock checkout; it does not require or accept a locally modified
+> patch checkout. Historical recovery under enabled summarization is planned, not yet
+> claimed, in `2026-07-31-tool-pair-summarization-hardening-plan.md`.
+
 The sustained driver is implemented in `sandboxed_goose.live_test`. It separates two
 phases over one isolated Goose root and exact session ID; the audit phase resumes the
 session only after the initial phase has passed.

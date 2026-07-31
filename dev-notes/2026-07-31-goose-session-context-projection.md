@@ -1,5 +1,13 @@
 # 2026-07-31: Goose session context projection
 
+> **Historical prototype note:** This document records the first projection and its
+> live verification, including an experimental Goose provenance patch. The supported
+> runtime contract is now stock, unmodified Goose. Stock Goose safely exposes only
+> currently agent-visible rows; durable recovery of rows later hidden by summarization
+> or compaction awaits the project-owned disclosure ledger described in
+> `2026-07-31-tool-pair-summarization-hardening-plan.md`. The patch remains optional
+> development evidence, not an installation, runtime, or acceptance prerequisite.
+
 ## Outcome
 
 The toy ContextFS generator now has a session-scoped input that projects the current

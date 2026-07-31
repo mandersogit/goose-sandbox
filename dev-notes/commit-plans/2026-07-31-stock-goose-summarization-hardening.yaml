@@ -1,0 +1,50 @@
+commits:
+  - message: |
+      fix: remove patched Goose from live verification
+
+      Declare stock, unmodified Goose as the live-test runtime contract and
+      treat an optional source checkout as clean provenance instead of
+      requiring the experimental history patch. Keep projected disclosure
+      metadata implementation-neutral and cover clean and modified source
+      states with focused tests.
+    files:
+      - src/sandboxed_goose/contextfs/goose_session.py
+      - src/sandboxed_goose/live_test.py
+      - tests/test_live_test.py
+
+  - message: |
+      test: characterize stock Goose summarization
+
+      Check in the pinned stock message and metadata shapes, a deterministic
+      SQLite writer oracle, boundary and transaction tests, and a real-Goose
+      wrapper regression with an enabled inverse control. Prove the project
+      override prevents summarization while the stock behavior still archives
+      and summarizes the expected ten tool pairs when deliberately enabled.
+    files:
+      - tests/__init__.py
+      - tests/fixtures/stock-goose-session-v1.json
+      - tests/support/__init__.py
+      - tests/support/stock_goose.py
+      - tests/test_goose_summarization_controls.py
+      - tests/test_stock_goose_contract.py
+
+  - message: |
+      docs: define the stock Goose hardening contract
+
+      Make the public and historical documentation consistently identify the
+      Goose patch as an optional experiment, record the verified stock behavior
+      and test checkpoint, and specify the project-owned disclosure ledger,
+      operation-pinned views, limits, and acceptance gates needed to tolerate
+      repeated summarization safely.
+    files:
+      - Makefile
+      - README.md
+      - dev-notes/2026-07-31-goose-control-environment.md
+      - dev-notes/2026-07-31-goose-session-context-projection.md
+      - dev-notes/2026-07-31-live-session-context-driver.md
+      - dev-notes/2026-07-31-tool-pair-summarization-hardening-plan.md
+      - dev-notes/README.md
+      - dev-notes/commit-plans/2026-07-31-stock-goose-summarization-hardening.yaml
+      - docs/APPTAINER.md
+      - docs/DESIGN.md
+      - patches/goose/README.md

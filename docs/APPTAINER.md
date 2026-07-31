@@ -461,10 +461,12 @@ exclusively creates a mode-`0600` UTF-8 JSON bundle. The trusted launcher binds 
 file read-only at the fixed path. It does not bind the Goose database, its WAL, the
 Goose state root, or a directory that could reveal another session.
 
-Run `make goose-patches` against the Goose source used for testing. The patch records
-`historicallyAgentVisible` only while archiving a row that is currently agent-visible.
-An unpatched or older database fails safely by exposing current rows only; it cannot
-retroactively identify messages compacted before the marker was recorded.
+Stock, unmodified Goose is the supported runtime. The current exporter safely exposes
+current rows only; a stock row made agent-invisible by summarization or compaction has
+no trustworthy prior-disclosure marker and remains excluded. Project-managed launches
+therefore force tool-pair summarization off. Defensive recovery under accidentally
+enabled summarization will use a project-owned atomic disclosure ledger, not a patched
+Goose binary.
 
 The current context-enabled SIF has SHA-256:
 

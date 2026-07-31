@@ -1,9 +1,14 @@
 # Goose history-provenance patch
 
+This patch is retained as a development experiment and reference. It is not part of
+the supported product runtime, which must work with stock, unmodified Goose. Do not
+build deployment assumptions or acceptance tests around this patch.
+
 `0001-preserve-agent-visible-history-provenance.patch` was developed and verified
 against Goose commit `ee61c7c499dbf08786a75948d949639cbab14150` (version `1.45.0`).
 
-Apply it idempotently to a clean or compatible Goose checkout:
+For comparison experiments only, apply it idempotently to a clean or compatible Goose
+checkout:
 
 ```bash
 GOOSE_SOURCE_DIR=/absolute/path/to/goose make goose-patches

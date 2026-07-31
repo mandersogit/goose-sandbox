@@ -48,9 +48,12 @@ Goose is launched with `--no-profile` and exactly one `--with-extension` argumen
   one parameterized session, and emits only normalized content with current or
   historical agent-disclosure provenance. Both MCP adapters expose the same bounded
   `session_context` list/read tool.
-- A small Goose patch records `historicallyAgentVisible` when compaction or tool-pair
-  summarization replaces content that the model previously received. It never marks
-  already-hidden content, so user-only and other undisclosed rows stay excluded.
+- Stock, unmodified Goose is the supported runtime. The current projector excludes
+  agent-invisible stock rows because it cannot distinguish archived former context from
+  never-disclosed content; the launcher forces tool-pair summarization off.
+- The planned defensive path uses project-owned atomic SQLite disclosure-ledger
+  triggers rather than a Goose source patch. Until that lands, archived-history
+  recovery is incomplete but remains fail-closed.
 - No read, write, or shell tools until a real backend is selected and tested.
 - Hostile Linux commands use an independent workspace snapshot, immutable runtime,
   offline network namespace, seccomp, cgroup limits, hard storage quotas, and reviewed

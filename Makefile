@@ -23,7 +23,7 @@ help:
 	@echo "  apptainer-context-image  Build and test the ContextFS proof SIF"
 	@echo "  test-apptainer-contextfs  Re-test an existing ContextFS proof SIF"
 	@echo "  test-real-session-contextfs  Test a configured real Goose session through FUSE"
-	@echo "  goose-patches  Apply the history-provenance patch to GOOSE_SOURCE_DIR or goose-dev"
+	@echo "  goose-patches  Apply the optional provenance experiment (not required at runtime)"
 	@echo "  goose        Run Goose with the official SDK adapter; pass ARGS='session ...'"
 	@echo "  goose-mcp-sdk  Run Goose with the official SDK adapter"
 	@echo "  goose-fastmcp  Run Goose with the standalone FastMCP adapter"

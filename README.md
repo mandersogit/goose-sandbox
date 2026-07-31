@@ -238,11 +238,13 @@ SQLite source-row IDs, so Goose history compaction cannot make a path refer to a
 different message. The `ordinal` and `contextVisibility` fields remain
 snapshot-relative, and the oracle validates the exact values returned by the tool.
 
-Goose needs the repository's small provenance patch to preserve model-visible rows
-when compaction or tool-pair summarization archives them. Apply it to a Goose checkout
-with `make goose-patches`; set `GOOSE_SOURCE_DIR` when the checkout is not available as
-`goose-dev`. Unpatched Goose remains safe—the projector exposes only currently visible
-rows—but cannot recover rows compacted before the provenance marker existed.
+The supported runtime contract is stock, unmodified Goose. The current projector
+exposes only currently visible rows from stock Goose; once stock Goose archives a row,
+the row is ambiguous and remains excluded. The launcher therefore forces tool-pair
+summarization off. The tracked provenance patch is retained only as a development
+reference, not as an installation requirement. The
+[hardening plan](dev-notes/2026-07-31-tool-pair-summarization-hardening-plan.md)
+replaces that dependency with a project-owned atomic disclosure ledger.
 
 Chronological implementation findings and local verification are recorded in
 [dev-notes](dev-notes/README.md).
