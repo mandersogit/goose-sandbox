@@ -264,7 +264,11 @@ async def test_real_many_turn_session_is_read_through_apptainer_fuse(
             offset = next_offset
         assert bytes(transcript) == projection.files["session/transcript.md"]
 
-        messages = await _call(client, session_id, path="session/messages")
+        messages = await _call(
+            client,
+            session_id,
+            path="session/messages/by-source-row",
+        )
         assert len(messages["entries"]) == direct_manifest["projected_messages"]
 
     assert _fuse_connections() == connections_before

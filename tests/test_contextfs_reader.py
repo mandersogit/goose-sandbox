@@ -22,7 +22,7 @@ def mounted_tree(tmp_path: Path) -> tuple[Path, SessionProjection]:
     files = {
         "manifest.json": b'{"session_id":"many-turn-session"}\n',
         "session/transcript.md": "first\nsecond\nthird é\n".encode(),
-        "session/messages/000001.json": b'{"ordinal":1}\n',
+        "session/messages/by-source-row/00000000000000000001.json": b'{"ordinal":1}\n',
     }
     root = tmp_path / "context"
     for relative, content in files.items():
@@ -39,7 +39,7 @@ def mounted_tree(tmp_path: Path) -> tuple[Path, SessionProjection]:
         ("/context/session", 0, 1024),
         ("manifest.json", 0, 8),
         ("session/transcript.md", 6, 9),
-        ("session/messages/000001.json", 100, 32),
+        ("session/messages/by-source-row/00000000000000000001.json", 100, 32),
     ],
 )
 def test_mounted_reader_matches_in_memory_projection(

@@ -8,11 +8,14 @@ from typing import Any
 
 import pytest
 from fastmcp import Client
+from fastmcp.exceptions import ToolError
 
 import sandboxed_goose.contextfs.goose_session as goose_session_module
 from sandboxed_goose.config import Settings
 from sandboxed_goose.contextfs.bundle import decode_bundle, encode_bundle, write_bundle
 from sandboxed_goose.contextfs.goose_session import (
+    EVENT_PATH_PREFIX,
+    MESSAGE_PATH_PREFIX,
     SessionProjection,
     project_goose_session,
     render_projection_path,
@@ -215,6 +218,27 @@ def test_projection_is_exact_session_bounded_and_agent_visible(goose_database: P
     assert manifest["audience_filtered_blocks"] == 2
     assert manifest["content_omissions"]["internal-reasoning-not-projected"] == 2
     assert manifest["read_only"] is True
+    assert manifest["schema_version"] == 2
+
+    message_files = {
+        path: json.loads(content)
+        for path, content in projection.files.items()
+        if path.startswith(f"{MESSAGE_PATH_PREFIX}/")
+    }
+    assert len(message_files) == manifest["projected_messages"]
+    for path, payload in message_files.items():
+        assert path == f"{MESSAGE_PATH_PREFIX}/{payload['sourceRowId']:020d}.json"
+
+    event_files = {
+        path: json.loads(content)
+        for path, content in projection.files.items()
+        if path.startswith(f"{EVENT_PATH_PREFIX}/")
+    }
+    assert len(event_files) == manifest["projected_events"]
+    for path, payload in event_files.items():
+        assert path == (
+            f"{EVENT_PATH_PREFIX}/{payload['sourceRowId']:020d}-{payload['contentIndex']:06d}.json"
+        )
 
     assert "VISIBLE_USER_MARKER" in all_content
     assert "PRECOMPACTION_HISTORY_MARKER" in all_content
@@ -338,3 +362,50 @@ async def test_both_adapters_bind_projection_to_mcp_request_metadata(
     manifest = json.loads(envelope["content"])
     assert manifest["session_id"] == "current"
     assert manifest["projection"] == "goose-session-disclosed-history"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("build_server", SERVER_BUILDERS)
+async def test_both_adapters_resolve_bounded_tail_reads_on_the_trusted_host(
+    build_server: ServerBuilder,
+    goose_database: Path,
+) -> None:
+    settings = Settings(session_database=goose_database)
+    projection = project_goose_session(goose_database, "current")
+    transcript = projection.files["session/transcript.md"]
+
+    async with Client(build_server(settings)) as client:
+        result = await client.call_tool(
+            "session_context",
+            {"path": "session/transcript.md", "limit": 64, "tail": True},
+            meta={GOOSE_SESSION_META_KEY: "current"},
+        )
+
+    assert result.is_error is not True
+    envelope = json.loads(result.content[0].text)
+    offset = envelope["offset"]
+    assert max(len(transcript) - 64, 0) <= offset <= max(len(transcript) - 64, 0) + 3
+    assert envelope["content"].encode() == transcript[offset:]
+    assert envelope["next_offset"] is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("build_server", SERVER_BUILDERS)
+async def test_both_adapters_reject_ambiguous_or_directory_tail_reads(
+    build_server: ServerBuilder,
+    goose_database: Path,
+) -> None:
+    settings = Settings(session_database=goose_database)
+    async with Client(build_server(settings)) as client:
+        with pytest.raises(ToolError, match="nonzero offset"):
+            await client.call_tool(
+                "session_context",
+                {"path": "session/transcript.md", "offset": 1, "limit": 64, "tail": True},
+                meta={GOOSE_SESSION_META_KEY: "current"},
+            )
+        with pytest.raises(ToolError, match="file path"):
+            await client.call_tool(
+                "session_context",
+                {"path": "session", "limit": 64, "tail": True},
+                meta={GOOSE_SESSION_META_KEY: "current"},
+            )
