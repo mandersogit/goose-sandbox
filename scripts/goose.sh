@@ -23,6 +23,10 @@ esac
 export GOOSE_PATH_ROOT="${GOOSE_PATH_ROOT:-$PROJECT_ROOT/.sandbox/goose}"
 export GOOSE_DISABLE_KEYRING="${GOOSE_DISABLE_KEYRING:-true}"
 export GOOSE_TELEMETRY_ENABLED="${GOOSE_TELEMETRY_ENABLED:-false}"
+# Tool-pair summarization mutates persisted conversation history asynchronously and
+# makes session projections race with a request already in flight. It is an unsupported
+# Goose mode for this project, even when a caller inherited an explicit true value.
+export GOOSE_TOOL_PAIR_SUMMARIZATION=false
 
 if [[ "${SANDBOXED_GOOSE_SESSION_CONTEXT_TRANSPORT:-direct}" == "apptainer-fuse" ]]; then
   export SANDBOXED_GOOSE_CONTEXT_IMAGE="${SANDBOXED_GOOSE_CONTEXT_IMAGE:-$PROJECT_ROOT/.sandbox/apptainer/images/sandbox-python-context-arm64.sif}"

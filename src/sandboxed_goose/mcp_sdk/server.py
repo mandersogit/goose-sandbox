@@ -54,6 +54,7 @@ def build_server(settings: Settings | None = None) -> MCPServer[dict[str, Any]]:
         path: str = "",
         offset: int = 0,
         limit: int = 64 * 1024,
+        tail: bool = False,
     ) -> str:
         params = ctx.request_context.params
         raw_meta = params.get("_meta") if isinstance(params, Mapping) else None
@@ -63,7 +64,7 @@ def build_server(settings: Settings | None = None) -> MCPServer[dict[str, Any]]:
             else None
         )
         session_id = resolve_session_id(meta)
-        return render_session_context(active_settings, session_id, path, offset, limit)
+        return render_session_context(active_settings, session_id, path, offset, limit, tail)
 
     return server
 

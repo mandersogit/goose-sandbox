@@ -52,12 +52,13 @@ def build_server(settings: Settings | None = None) -> FastMCP[None]:
         path: str = "",
         offset: int = 0,
         limit: int = 64 * 1024,
+        tail: bool = False,
     ) -> str:
         request_context = ctx.request_context
         raw_meta = request_context.meta if request_context is not None else None
         meta: Mapping[str, object] | None = raw_meta
         session_id = resolve_session_id(meta)
-        return render_session_context(active_settings, session_id, path, offset, limit)
+        return render_session_context(active_settings, session_id, path, offset, limit, tail)
 
     return server
 
