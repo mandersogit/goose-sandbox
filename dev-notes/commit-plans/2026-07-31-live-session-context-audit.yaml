@@ -1,0 +1,49 @@
+commits:
+  - message: |
+      fix: stabilize projected Goose history paths
+
+      Address projected message and event files by immutable SQLite source
+      row IDs so compaction and other visibility changes cannot make an
+      existing path refer to a different record. Mark snapshot-relative
+      fields explicitly and cover the schema, reader, adapter, and real-FUSE
+      path changes.
+    files:
+      - src/sandboxed_goose/contextfs/goose_session.py
+      - tests/test_contextfs_reader.py
+      - tests/test_goose_session_projection.py
+      - tests/test_real_session_contextfs.py
+
+  - message: |
+      feat: add sustained live session-context verification
+
+      Add synchronized bounded tail reads and a two-phase Goose/Ollama driver
+      that verifies exact-session FUSE access, decoy isolation, accumulating
+      self-history, persisted tool exchanges, and explicit failed-attempt
+      recovery. Force-disable Goose's asynchronous tool-pair summarizer in
+      every project-managed invocation and add wrapper and oracle regressions.
+    files:
+      - pyproject.toml
+      - scripts/goose.sh
+      - src/sandboxed_goose/fastmcp/server.py
+      - src/sandboxed_goose/live_test.py
+      - src/sandboxed_goose/mcp_sdk/server.py
+      - src/sandboxed_goose/tools/session_context.py
+      - tests/test_goose_wrapper.py
+      - tests/test_live_test.py
+
+  - message: |
+      docs: record live ContextFS and Goose control findings
+
+      Document the sustained and chained live results, stable source-row
+      layout, tool-pair summarization race, project-wide hard-disable, and a
+      source-reviewed policy for Goose control environment variables. Keep
+      provider endpoints, local paths, model identities, and raw artifacts in
+      ignored private notes and run directories.
+    files:
+      - README.md
+      - dev-notes/2026-07-31-dynamic-context-fuse-and-nesting.md
+      - dev-notes/2026-07-31-goose-control-environment.md
+      - dev-notes/2026-07-31-goose-session-context-projection.md
+      - dev-notes/2026-07-31-live-session-context-driver.md
+      - dev-notes/README.md
+      - dev-notes/commit-plans/2026-07-31-live-session-context-audit.yaml

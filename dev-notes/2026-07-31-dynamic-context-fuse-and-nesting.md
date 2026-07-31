@@ -64,8 +64,9 @@ Useful examples include:
   session/
     transcript.md
     messages/
-      000001.json
-      000002.json
+      by-source-row/
+        00000000000000000001.json
+        00000000000000000002.json
     tool-calls/
       000001.json
     artifacts/

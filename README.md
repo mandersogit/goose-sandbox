@@ -11,8 +11,9 @@ The shared tool surface is:
 
 - `sandbox_status()`: reports the requested sandbox configuration and confirms that execution remains disabled.
 - `calculate(expression)`: evaluates bounded basic arithmetic with parentheses and `+`, `-`, `*`, `/`, `//`, `%`, and `**`.
-- `session_context(path="", offset=0, limit=65536)`: lists or reads bounded,
-  read-only virtual files projected from the current Goose session.
+- `session_context(path="", offset=0, limit=65536, tail=False)`: lists or reads
+  bounded, read-only virtual files projected from the current Goose session. A tail
+  read resolves the final `limit` bytes inside the trusted projection.
 
 The calculator parses expressions with Python's `ast` module and recursively evaluates only explicitly supported numeric nodes. It never evaluates the source or compiles the accepted tree into executable bytecode. Expression length, AST size, exponent magnitude, finite numbers, and intermediate result magnitude are bounded.
 
@@ -41,6 +42,7 @@ sandboxed-goose-fastmcp
 sandboxed-goose-contextfs  # image-only dependencies; not an MCP tool
 sandboxed-goose-read-context  # fixed image-only reader; not an MCP tool
 sandboxed-goose-export-session  # trusted host-side snapshot exporter
+sandboxed-goose-live-test  # sustained model/FUSE verification driver
 ```
 
 `sandboxed-goose-mcp` and `python -m sandboxed_goose` remain aliases for the official SDK implementation.
@@ -95,6 +97,13 @@ directories and is ignored by Git. Override it only with another absolute path:
 ```bash
 GOOSE_PATH_ROOT=/tmp/sandboxed-goose-test make goose-fastmcp ARGS='session'
 ```
+
+Every project-managed Goose invocation force-disables Goose's background tool-pair
+summarizer with `GOOSE_TOOL_PAIR_SUMMARIZATION=false`. That feature asynchronously
+archives tool request/result rows and inserts summaries while a turn is running, which
+is incompatible with exact accumulating-session tests. The wrapper deliberately
+overrides an inherited `true` value; ordinary token-threshold compaction remains
+available.
 
 For a Goose executable outside `PATH`:
 
@@ -187,6 +196,47 @@ scripts/shell-apptainer-session-context.sh \
 The script opens an offline interactive Bash shell with the session at `/context` and
 removes its private projection bundle when the shell exits. It also accepts an explicit
 `--database PATH --session-id ID` pair.
+
+### Sustained live test
+
+The live-test driver creates a new private Goose root, a same-database decoy session,
+and a primary session that it resumes for 10–200 sequential turns. Every primary turn
+must make two bounded `session_context` reads through the `apptainer-fuse` transport.
+The driver verifies the canonical SQLite rows, request/result IDs, exact tool names and
+arguments, fresh projection snapshot, current-turn canary, decoy isolation, and final
+assistant sentinel after every invocation. It preserves prompts, outputs, reports,
+configuration, and the complete Goose root under `.sandbox/live-tests/`.
+
+Supply the provider endpoint, model, and Goose binary explicitly (or via the matching
+environment variables); none are embedded in the project:
+
+```bash
+local.venv/bin/python -m sandboxed_goose.live_test initial \
+  --ollama-host http://127.0.0.1:11434 \
+  --model your-tool-capable-model \
+  --goose-bin /path/to/goose \
+  --turns 10 \
+  --adapter mcp-sdk
+```
+
+After that phase passes, the same session can perform projection-dependent work:
+
+```bash
+local.venv/bin/python -m sandboxed_goose.live_test audit \
+  --run /absolute/path/to/.sandbox/live-tests/RUN_ID \
+  --tasks 1
+```
+
+Each audit task lists `session/messages/by-source-row`, reads a host-selected message
+from prior work, and must recover `sourceRowId`, `messageId`, `createdAt`, and disclosure
+visibility—data that is present in the projected JSON but not in ordinary conversation
+messages. It returns those values in a strict plain-text record so provider tool-call
+parsers cannot mistake a requested JSON object for another tool call. Task one targets
+the last initial reply; each later task targets the preceding audit reply, proving that
+the projected filesystem refreshes as work accumulates. Message paths use immutable
+SQLite source-row IDs, so Goose history compaction cannot make a path refer to a
+different message. The `ordinal` and `contextVisibility` fields remain
+snapshot-relative, and the oracle validates the exact values returned by the tool.
 
 Goose needs the repository's small provenance patch to preserve model-visible rows
 when compaction or tool-pair summarization archives them. Apply it to a Goose checkout

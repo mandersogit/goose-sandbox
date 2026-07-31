@@ -38,17 +38,20 @@ One immutable generation contains:
   session/
     transcript.md
     messages/
-      000001.json
-      ...
+      by-source-row/
+        00000000000000000001.json
+        ...
     events/
-      000001.json
-      ...
+      by-source-row/
+        00000000000000000001-000001.json
+        ...
 ```
 
 Messages are ordered chronologically. An event is one normalized content block from a
-projected message. The manifest records the exact session ID, deterministic snapshot
-ID, source and visible row counts, truncation state, omission counters, limits, file
-sizes, and SHA-256 digests.
+projected message. Filenames use immutable source-row IDs, while ordinal fields describe
+the current snapshot and may change after compaction. The manifest records the exact
+session ID, deterministic snapshot ID, source and visible row counts, truncation state,
+omission counters, limits, file sizes, and SHA-256 digests.
 
 `session_context` accepts a virtual path, byte offset, and maximum read size. A
 directory path returns a listing; a file returns at most 65,536 bytes and a continuation
