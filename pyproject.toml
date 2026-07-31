@@ -1,0 +1,104 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sandboxed-goose"
+version = "0.0.1"
+description = "A sandboxed developer-tool MCP extension for Goose."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+keywords = ["agent", "goose", "mcp", "sandbox", "security"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
+dependencies = [
+  "fastmcp==4.0.0b1",
+  "mcp==2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.8",
+  "pyright>=1.1",
+  "pytest>=8.0",
+  "pytest-cov>=4.0",
+  "pytest-timeout>=2.0",
+  "ruff>=0.3",
+]
+
+[project.scripts]
+sandboxed-goose-fastmcp = "sandboxed_goose.fastmcp.__main__:main"
+sandboxed-goose-mcp = "sandboxed_goose.mcp_sdk.__main__:main"
+sandboxed-goose-mcp-sdk = "sandboxed_goose.mcp_sdk.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+sandboxed_goose = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+markers = [
+  "integration: marks subprocess or Goose integration tests",
+]
+
+[tool.coverage.run]
+source = ["src/sandboxed_goose"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "if __name__ == .__main__.:",
+]
+show_missing = true
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+packages = ["sandboxed_goose"]
+
+[tool.pyright]
+pythonVersion = "3.11"
+venvPath = "."
+venv = "local.venv"
+typeCheckingMode = "basic"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "B",
+  "C4",
+  "E",
+  "F",
+  "I",
+  "SIM",
+  "UP",
+  "W",
+]
+ignore = [
+  "E501",
+  "SIM108",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["sandboxed_goose"]

@@ -1,0 +1,48 @@
+commits:
+  - message: |
+      feat: scaffold sandboxed Goose MCP extension
+
+      Add synchronized MCP SDK and FastMCP stdio adapters with a
+      fail-closed status tool and bounded calculator. Include the isolated
+      Goose test harness, Bubblewrap and Apptainer designs, the validated
+      rootless Apptainer image recipe, tests, development notes, and MIT
+      licensing.
+    files:
+      - .gitignore
+      - LICENSE
+      - Makefile
+      - README.md
+      - dev-notes/commit-plans/2026-07-30-initial-commit.yaml
+      - containers/apptainer/apptainer-build.conf
+      - containers/apptainer/apptainer-hostile.conf
+      - containers/apptainer/sandbox-python-arm64.def
+      - dev-notes/2026-07-30-apptainer-bring-up.md
+      - dev-notes/2026-07-30-bootstrap.md
+      - dev-notes/README.md
+      - docs/APPTAINER.md
+      - docs/BUBBLEWRAP.md
+      - docs/DESIGN.md
+      - pyproject.toml
+      - scripts/build-apptainer-image.sh
+      - scripts/goose.sh
+      - src/sandboxed_goose/__init__.py
+      - src/sandboxed_goose/__main__.py
+      - src/sandboxed_goose/config.py
+      - src/sandboxed_goose/contract.py
+      - src/sandboxed_goose/fastmcp/__init__.py
+      - src/sandboxed_goose/fastmcp/__main__.py
+      - src/sandboxed_goose/fastmcp/server.py
+      - src/sandboxed_goose/mcp_sdk/__init__.py
+      - src/sandboxed_goose/mcp_sdk/__main__.py
+      - src/sandboxed_goose/mcp_sdk/server.py
+      - src/sandboxed_goose/py.typed
+      - src/sandboxed_goose/server.py
+      - src/sandboxed_goose/tools/__init__.py
+      - src/sandboxed_goose/tools/calculator.py
+      - src/sandboxed_goose/tools/definition.py
+      - src/sandboxed_goose/tools/status.py
+      - tests/test_calculator.py
+      - tests/test_config.py
+      - tests/test_goose_tools.py
+      - tests/test_server.py
+      - tests/test_stdio.py
