@@ -13,6 +13,8 @@ from typing import Any
 
 import pytest
 
+from sandboxed_goose.contextfs.disclosure_ledger import verify_disclosure_ledger
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 GOOSE_BIN = Path(os.environ.get("GOOSE_BIN") or shutil.which("goose") or "__goose_not_found__")
 
@@ -343,3 +345,6 @@ def test_goose_binds_session_context_tool_to_the_active_session(
     assert manifest is not None
     assert manifest["session_id"] == session_ids[0]
     assert manifest["projected_messages"] >= 1
+    ledger = verify_disclosure_ledger(database, session_ids[0])
+    assert ledger.session_id == session_ids[0]
+    assert ledger.coverage_complete is True

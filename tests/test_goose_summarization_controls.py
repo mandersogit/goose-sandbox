@@ -16,6 +16,10 @@ from typing import Any
 
 import pytest
 
+from sandboxed_goose.contextfs.disclosure_ledger import (
+    ENTRY_TABLE,
+    verify_disclosure_ledger,
+)
 from tests.support.stock_goose import StockGooseDatabase
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -230,6 +234,9 @@ def _initialize_seeded_session(goose_root: Path) -> tuple[str, Path]:
 
     database = goose_root / "data" / "sessions" / "sessions.db"
     session_id = _session_id(database, session_name)
+    startup_status = verify_disclosure_ledger(database, session_id)
+    assert startup_status.coverage_complete is True
+    assert startup_status.ledger_entries >= 1
     fixture = StockGooseDatabase(database)
     connection = fixture.connect()
     try:
@@ -344,6 +351,27 @@ def _response_timestamps(database: Path, session_id: str) -> list[int]:
     return [int(record[0]) for record in records]
 
 
+def _tool_pair_ledger_rows(
+    database: Path, session_id: str
+) -> dict[str, tuple[str, dict[str, Any]]]:
+    connection = sqlite3.connect(database)
+    try:
+        records = connection.execute(
+            f"""
+            SELECT message_id, capture_reason, metadata_json FROM {ENTRY_TABLE}
+            WHERE session_id = ?
+              AND (message_id LIKE 'request-%' OR message_id LIKE 'response-%')
+            """,
+            (session_id,),
+        ).fetchall()
+    finally:
+        connection.close()
+    return {
+        str(message_id): (str(capture_reason), json.loads(metadata_json))
+        for message_id, capture_reason, metadata_json in records
+    }
+
+
 def test_wrapper_disables_real_tool_pair_summarization_with_enabled_inverse_control(
     tmp_path: Path,
 ) -> None:
@@ -368,6 +396,10 @@ def test_wrapper_disables_real_tool_pair_summarization_with_enabled_inverse_cont
     assert all(disabled_visibility[f"request-{ordinal:03d}"] for ordinal in range(1, 14))
     assert all(disabled_visibility[f"response-{ordinal:03d}"] for ordinal in range(1, 14))
     assert _summary_rows(disabled_database, session_id) == []
+    disabled_ledger = _tool_pair_ledger_rows(disabled_database, session_id)
+    assert len(disabled_ledger) == 26
+    assert all(reason == "visible-insert" for reason, _metadata in disabled_ledger.values())
+    assert verify_disclosure_ledger(disabled_database, session_id).coverage_complete is True
 
     enabled_result, enabled_requests, enabled_errors = _resume(
         enabled_root, session_id, through_wrapper=False
@@ -402,3 +434,14 @@ def test_wrapper_disables_real_tool_pair_summarization_with_enabled_inverse_cont
         metadata["agentVisible"] is True and metadata["userVisible"] is False
         for _role, _created, metadata in summaries
     )
+    enabled_ledger = _tool_pair_ledger_rows(enabled_database, session_id)
+    assert len(enabled_ledger) == 26
+    for ordinal in range(1, 11):
+        request = enabled_ledger[f"request-{ordinal:03d}"]
+        response = enabled_ledger[f"response-{ordinal:03d}"]
+        assert request[0] == response[0] == "pre-archive"
+        assert request[1]["agentVisible"] is response[1]["agentVisible"] is True
+    for ordinal in range(11, 14):
+        assert enabled_ledger[f"request-{ordinal:03d}"][0] == "visible-insert"
+        assert enabled_ledger[f"response-{ordinal:03d}"][0] == "visible-insert"
+    assert verify_disclosure_ledger(enabled_database, session_id).coverage_complete is True
