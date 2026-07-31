@@ -9,6 +9,8 @@ from pathlib import Path
 
 BACKEND_ENV = "SANDBOXED_GOOSE_BACKEND"
 WORKSPACE_ENV = "SANDBOXED_GOOSE_WORKSPACE"
+SESSION_DATABASE_ENV = "SANDBOXED_GOOSE_SESSION_DATABASE"
+GOOSE_PATH_ROOT_ENV = "GOOSE_PATH_ROOT"
 
 
 def _optional_value(value: str | None) -> str | None:
@@ -27,6 +29,7 @@ class Settings:
 
     requested_backend: str | None = None
     workspace: Path | None = None
+    session_database: Path | None = None
 
     @classmethod
     def from_environment(cls, environ: Mapping[str, str] | None = None) -> Settings:
@@ -35,4 +38,16 @@ class Settings:
         backend = _optional_value(source.get(BACKEND_ENV))
         workspace_value = _optional_value(source.get(WORKSPACE_ENV))
         workspace = Path(workspace_value) if workspace_value is not None else None
-        return cls(requested_backend=backend, workspace=workspace)
+        database_value = _optional_value(source.get(SESSION_DATABASE_ENV))
+        goose_root_value = _optional_value(source.get(GOOSE_PATH_ROOT_ENV))
+        if database_value is not None:
+            session_database = Path(database_value)
+        elif goose_root_value is not None:
+            session_database = Path(goose_root_value) / "data" / "sessions" / "sessions.db"
+        else:
+            session_database = None
+        return cls(
+            requested_backend=backend,
+            workspace=workspace,
+            session_database=session_database,
+        )

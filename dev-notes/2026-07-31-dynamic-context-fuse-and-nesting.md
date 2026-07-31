@@ -1,5 +1,11 @@
 # 2026-07-31: dynamic context filesystems, in-container FUSE, and nesting
 
+> Follow-up: the first Goose session projection uses an immutable, host-generated
+> bundle rather than a live socket broker. See
+> [Goose session context projection](2026-07-31-goose-session-context-projection.md).
+> This is sufficient for a fresh coherent generation per future sandbox invocation;
+> the broker design below remains the direction for truly lazy or live data sources.
+
 ## Question and conclusion
 
 The motivating idea is a proc-like filesystem that gives the model a familiar,

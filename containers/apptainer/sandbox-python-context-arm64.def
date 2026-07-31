@@ -1,0 +1,65 @@
+Bootstrap: localimage
+From: {{ base_image }}
+
+%labels
+    io.sandboxed-goose.contextfs "toy-v1"
+
+%files
+    {{ project_wheel }} /opt/sandboxed_goose-0.0.1-py3-none-any.whl
+
+%post
+    set -eu
+
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+
+    pyfuse_version="$(
+        apt-cache madison python3-pyfuse3 |
+            awk 'NR == 1 { print $3 }'
+    )"
+    if [ -z "$pyfuse_version" ]; then
+        echo "python3-pyfuse3 is missing from the configured Ubuntu snapshot" >&2
+        exit 1
+    fi
+
+    apt-get install -y --no-install-recommends \
+        "python3-pyfuse3=$pyfuse_version"
+    python3 -m pip install \
+        --break-system-packages \
+        --no-cache-dir \
+        --no-deps \
+        --no-index \
+        /opt/sandboxed_goose-0.0.1-py3-none-any.whl
+
+    install -d -o root -g root -m 0555 /context /run/sandboxed-goose
+    touch /run/sandboxed-goose/session-context.json
+    chown root:root /run/sandboxed-goose/session-context.json
+    chmod 0400 /run/sandboxed-goose/session-context.json
+    chmod 0555 /usr/local/bin/sandboxed-goose-contextfs
+
+    rm -f /opt/sandboxed_goose-0.0.1-py3-none-any.whl
+    apt-get clean
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/* /var/tmp/*
+    chmod 1777 /tmp /var/tmp
+
+%test
+    set -eu
+
+    python3 -c 'import pyfuse3, trio; assert pyfuse3.__version__'
+    sandboxed-goose-contextfs --help >/dev/null
+    test -d /context
+    test -f /run/sandboxed-goose/session-context.json
+    test ! -e /context/manifest.json
+    test ! -e /usr/bin/fusermount3
+    test ! -e /usr/bin/apptainer
+
+    if find / -xdev -type f \( -perm -4000 -o -perm -2000 \) \
+        -print -quit | grep -q .; then
+        echo "setuid or setgid file remains in context image" >&2
+        exit 1
+    fi
+
+    if getcap -r / 2>/dev/null | grep -q .; then
+        echo "file capability remains in context image" >&2
+        exit 1
+    fi

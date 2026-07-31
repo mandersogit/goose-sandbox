@@ -411,6 +411,105 @@ There is no fallback to host networking, a writable image, a directory image, su
 setuid mode, the original checkout, missing limits, missing seccomp, or direct host
 execution.
 
+## ContextFS proof
+
+The repository includes a separate, context-enabled experiment. It layers Ubuntu's
+`python3-pyfuse3` package and the project wheel onto the base SIF, then uses
+Apptainer's attached `container:` FUSE mode to synthesize a tree at `/context`.
+Nothing is materialized under `/context` in the image itself.
+
+Build the base image first, then the derivative proof image:
+
+```bash
+make apptainer-image
+make apptainer-context-image
+```
+
+The second command produces these ignored artifacts:
+
+```text
+.sandbox/apptainer/images/sandbox-python-context-arm64.sif
+.sandbox/apptainer/images/sandbox-python-context-arm64.sif.sha256
+```
+
+Re-run the proof without rebuilding:
+
+```bash
+make test-apptainer-contextfs
+```
+
+The frontend supports two constrained modes. With no bundle it exposes the original
+generated `manifest.json`, README, prime and square data, and one toy object. With the
+exact fixed argument
+`--bundle /run/sandboxed-goose/session-context.json`, it validates and exposes a
+trusted host-generated Goose session snapshot:
+
+```text
+/context/
+  README.md
+  manifest.json
+  session/
+    transcript.md
+    messages/000001.json
+    events/000001.json
+```
+
+The host exporter opens `sessions.db` with SQLite `mode=ro` and `query_only`, uses a
+parameterized exact session ID, selects current or explicitly preserved historical
+agent-disclosure rows, applies audience filtering and byte/object limits, then
+exclusively creates a mode-`0600` UTF-8 JSON bundle. The trusted launcher binds that one
+file read-only at the fixed path. It does not bind the Goose database, its WAL, the
+Goose state root, or a directory that could reveal another session.
+
+Run `make goose-patches` against the Goose source used for testing. The patch records
+`historicallyAgentVisible` only while archiving a row that is currently agent-visible.
+An unpatched or older database fails safely by exposing current rows only; it cannot
+retroactively identify messages compacted before the marker was recorded.
+
+The current context-enabled SIF has SHA-256:
+
+```text
+73f5cbd46e26b39a81f5e67ba15bbb55a08ad43190bac776d60b699a6c566f18
+```
+
+The integration check exercises both modes. It verifies content hashes, failed
+mutation, the exact `/dev/fd/3 -f` frontend process, absence of `/dev/fuse` and
+`fusermount3` from the payload, mount-namespace containment, and cleanup after both
+normal exit and signal termination. Its two-session fixture also proves that the
+selected session's ordinary text, pre-compaction history, tool request/result, and
+agent-only compaction summary appear while another session, user-only rows,
+audience-restricted text, thinking, `_meta`, and structured internal output do not. The ordinary
+`apptainer-hostile.conf` continues to reject the same `--fusemount` request.
+
+The context profile is intentionally separate:
+
+```text
+containers/apptainer/apptainer-hostile.conf          enable fusemount = no
+containers/apptainer/apptainer-hostile-context.conf  enable fusemount = yes
+```
+
+On Apptainer 1.5.3 the observed `/context` mount is `rw,nosuid,nodev`; read-only
+behavior comes from `0444`/`0555` projected modes and mutation handlers, not a kernel
+`ro` or `noexec` mount flag. `allow_other` is absent. The frontend remains visible to
+the model in the same PID namespace, so this is a mechanics proof rather than the
+final isolation boundary.
+
+The bundle itself is in the hostile container's readable domain. That is intentional:
+it contains exactly the same approved bytes as `/context`, and FUSE is an ergonomic
+interface rather than an authorization boundary. The bundle must therefore contain no
+ambient authority, database connection, credential, host path capability, or data not
+already approved for that session. Regenerating it for each future sandbox invocation
+provides a coherent immutable generation and makes the next invocation reflect any
+intervening Goose compaction.
+
+Do not implement a timeout by killing only a shell wrapper around Apptainer. An
+exploratory interruption did not clean up the entire runtime tree and orphaned the SIF
+reader until it was explicitly terminated. The future trusted supervisor must own the
+full process/cgroup lifecycle and retain a tested escalation path. The projection is
+not yet wired to a general Bash tool. The same virtual files are available through the
+narrow `session_context` MCP list/read tool in both adapters, which proves the Goose
+request-to-session binding without granting shell execution.
+
 ## Assessment
 
 Apptainer is promising for this backend:

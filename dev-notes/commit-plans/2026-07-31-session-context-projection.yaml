@@ -1,0 +1,47 @@
+commits:
+  - message: |
+      feat: project Goose session history into the sandbox
+
+      Add a bounded, immutable ContextFS frontend that exposes exact-session
+      transcripts, messages, and content events through both MCP adapters and
+      a read-only Apptainer mount. Preserve safe pre-compaction disclosure
+      provenance through a standalone Goose patch, exclude private and
+      unrelated content, and cover the complete path with contract, Goose,
+      bundle, FUSE, and Apptainer integration tests.
+    files:
+      - Makefile
+      - README.md
+      - containers/apptainer/apptainer-hostile-context.conf
+      - containers/apptainer/sandbox-python-context-arm64.def
+      - dev-notes/2026-07-31-contextfs-apptainer-proof.md
+      - dev-notes/2026-07-31-dynamic-context-fuse-and-nesting.md
+      - dev-notes/2026-07-31-goose-session-context-projection.md
+      - dev-notes/README.md
+      - dev-notes/commit-plans/2026-07-31-session-context-projection.yaml
+      - docs/APPTAINER.md
+      - docs/DESIGN.md
+      - patches/goose/0001-preserve-agent-visible-history-provenance.patch
+      - patches/goose/README.md
+      - pyproject.toml
+      - scripts/apply-goose-patches.sh
+      - scripts/build-apptainer-context-image.sh
+      - scripts/test-apptainer-contextfs.sh
+      - src/sandboxed_goose/config.py
+      - src/sandboxed_goose/contextfs/__init__.py
+      - src/sandboxed_goose/contextfs/__main__.py
+      - src/sandboxed_goose/contextfs/bundle.py
+      - src/sandboxed_goose/contextfs/fuse.py
+      - src/sandboxed_goose/contextfs/goose_session.py
+      - src/sandboxed_goose/contextfs/model.py
+      - src/sandboxed_goose/contract.py
+      - src/sandboxed_goose/fastmcp/server.py
+      - src/sandboxed_goose/mcp_sdk/server.py
+      - src/sandboxed_goose/session_binding.py
+      - src/sandboxed_goose/tools/__init__.py
+      - src/sandboxed_goose/tools/session_context.py
+      - tests/test_config.py
+      - tests/test_contextfs_cli.py
+      - tests/test_contextfs_model.py
+      - tests/test_goose_session_projection.py
+      - tests/test_goose_tools.py
+      - tests/test_session_binding.py

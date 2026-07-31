@@ -2,7 +2,7 @@
 
 A Python stdio MCP extension intended to replace Goose's built-in developer tools with a deliberately sandboxed tool surface.
 
-**Status:** pre-alpha scaffold. Two synchronized MCP adapters expose the same two host-safe tools:
+**Status:** pre-alpha scaffold. Two synchronized MCP adapters expose the same three host-safe tools:
 
 - `sandboxed_goose.mcp_sdk` uses the official MCP Python SDK.
 - `sandboxed_goose.fastmcp` uses the standalone FastMCP framework.
@@ -11,10 +11,14 @@ The shared tool surface is:
 
 - `sandbox_status()`: reports the requested sandbox configuration and confirms that execution remains disabled.
 - `calculate(expression)`: evaluates bounded basic arithmetic with parentheses and `+`, `-`, `*`, `/`, `//`, `%`, and `**`.
+- `session_context(path="", offset=0, limit=65536)`: lists or reads bounded,
+  read-only virtual files projected from the current Goose session.
 
 The calculator parses expressions with Python's `ast` module and recursively evaluates only explicitly supported numeric nodes. It never evaluates the source or compiles the accepted tree into executable bytecode. Expression length, AST size, exponent magnitude, finite numbers, and intermediate result magnitude are bounded.
 
-Filesystem and shell tools are intentionally not registered until a sandbox backend and its security contract are implemented. Framework-neutral behavior and metadata live under `sandboxed_goose.tools`; adapter parity is enforced by tests.
+General workspace read/write and shell tools are intentionally not registered until a
+sandbox backend and its security contract are implemented. Framework-neutral behavior
+and metadata live under `sandboxed_goose.tools`; adapter parity is enforced by tests.
 
 ## Development setup
 
@@ -34,6 +38,8 @@ The installed entry points are:
 ```text
 sandboxed-goose-mcp-sdk
 sandboxed-goose-fastmcp
+sandboxed-goose-contextfs  # image-only dependencies; not an MCP tool
+sandboxed-goose-export-session  # trusted host-side snapshot exporter
 ```
 
 `sandboxed-goose-mcp` and `python -m sandboxed_goose` remain aliases for the official SDK implementation.
@@ -76,8 +82,10 @@ For a new session, `--no-profile` prevents configured extensions and plugin MCP 
 MCP stdio client round trip, and—when Goose is on `PATH` or `GOOSE_BIN` is set—a real
 Goose run against a local mock model endpoint. The Goose test captures the model
 request and verifies that its tool array contains exactly the selected adapter's
-namespaced `calculate` and `sandbox_status` tools. It requires neither provider
-credentials nor internet access.
+three namespaced tools. A second deterministic run makes Goose call
+`session_context` and verifies that the returned manifest names the exact active
+session from Goose's SQLite store. It requires neither provider credentials nor
+internet access.
 
 The wrapper uses a project-local Goose root at `.sandbox/goose` by setting
 `GOOSE_PATH_ROOT`. The isolated root contains separate `config`, `data`, and `state`
@@ -105,6 +113,8 @@ These environment variables are parsed now so the eventual backend contract has 
 
 - `SANDBOXED_GOOSE_BACKEND`: requested backend name, such as `bubblewrap`, `apptainer`, or `seatbelt`
 - `SANDBOXED_GOOSE_WORKSPACE`: workspace path that would be exposed inside the sandbox
+- `SANDBOXED_GOOSE_SESSION_DATABASE`: optional explicit Goose `sessions.db` path;
+  otherwise it is derived from `GOOSE_PATH_ROOT`
 
 Setting them does not enable execution in the scaffold.
 
@@ -119,6 +129,27 @@ The host recommendation, hardened runtime configuration, and first arm64 Apptain
 image recipe are in [docs/APPTAINER.md](docs/APPTAINER.md). The rootless image has been
 built and validated locally, but the Apptainer backend is not yet wired to an execution
 tool and does not enable shell execution.
+
+ContextFS now has two proven inputs. Its original deterministic toy tree exercises the
+FUSE mechanics. The session projection reads exactly the session selected by Goose's
+`agent-session-id` MCP request metadata, normalizes current and explicitly preserved
+historically agent-visible messages, and exposes a manifest, Markdown transcript,
+per-message JSON, and per-content-event JSON. The trusted host exports a mode-`0600`
+bounded bundle; only that bundle—not the Goose database—is bound read-only into
+Apptainer. A fresh projection is built for each read or sandbox launch.
+
+The projection deliberately excludes rows without agent-disclosure provenance,
+audience-scoped user content, thinking blocks, binary payloads, provider metadata, MCP
+`_meta`, usage, cost, configuration, and all other sessions. `session_context` lets the
+agent list or read the same virtual files before the general sandboxed read/Bash tools
+exist. Build the image with `make apptainer-context-image` and rerun both toy and
+session checks with `make test-apptainer-contextfs`.
+
+Goose needs the repository's small provenance patch to preserve model-visible rows
+when compaction or tool-pair summarization archives them. Apply it to a Goose checkout
+with `make goose-patches`; set `GOOSE_SOURCE_DIR` when the checkout is not available as
+`goose-dev`. Unpatched Goose remains safe—the projector exposes only currently visible
+rows—but cannot recover rows compacted before the provenance marker existed.
 
 Chronological implementation findings and local verification are recorded in
 [dev-notes](dev-notes/README.md).

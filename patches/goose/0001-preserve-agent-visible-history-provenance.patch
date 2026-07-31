@@ -1,0 +1,107 @@
+diff --git a/crates/goose-provider-types/src/conversation/message.rs b/crates/goose-provider-types/src/conversation/message.rs
+index d6bfda109..7e8f500d1 100644
+--- a/crates/goose-provider-types/src/conversation/message.rs
++++ b/crates/goose-provider-types/src/conversation/message.rs
+@@ -663,6 +663,11 @@ pub struct MessageMetadata {
+     pub user_visible: bool,
+     /// Whether the message should be included in the agent's context window
+     pub agent_visible: bool,
++    /// Whether this message was previously agent-visible before being replaced by a
++    /// compacted or summarized representation. This permits narrowly scoped history
++    /// projections to re-disclose only content the agent actually received.
++    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
++    pub historically_agent_visible: bool,
+     #[serde(skip_serializing_if = "Option::is_none")]
+     pub inference: Option<InferenceMetadata>,
+     /// Whether this message is a steer injected into an active run. UI-only:
+@@ -679,6 +684,7 @@ impl Default for MessageMetadata {
+         MessageMetadata {
+             user_visible: true,
+             agent_visible: true,
++            historically_agent_visible: false,
+             inference: None,
+             steer: false,
+             usage: None,
+@@ -722,6 +728,15 @@ impl MessageMetadata {
+         }
+     }
+ 
++    /// Archive agent-visible content while retaining provenance that it was disclosed.
++    pub fn with_agent_archived(self) -> Self {
++        Self {
++            historically_agent_visible: self.historically_agent_visible || self.agent_visible,
++            agent_visible: false,
++            ..self
++        }
++    }
++
+     /// Return a copy with user_visible set to false
+     pub fn with_user_invisible(self) -> Self {
+         Self {
+@@ -1694,6 +1709,15 @@ mod tests {
+         let metadata = MessageMetadata::default().with_agent_invisible();
+         assert!(metadata.user_visible);
+         assert!(!metadata.agent_visible);
++        assert!(!metadata.historically_agent_visible);
++
++        // Archiving remembers only content that was actually agent-visible.
++        let metadata = MessageMetadata::default().with_agent_archived();
++        assert!(!metadata.agent_visible);
++        assert!(metadata.historically_agent_visible);
++        let metadata = MessageMetadata::user_only().with_agent_archived();
++        assert!(!metadata.agent_visible);
++        assert!(!metadata.historically_agent_visible);
+ 
+         // Test with_user_invisible
+         let metadata = MessageMetadata::default().with_user_invisible();
+diff --git a/crates/goose/src/agents/agent.rs b/crates/goose/src/agents/agent.rs
+index 9f9b581c8..2e2ae0d1d 100644
+--- a/crates/goose/src/agents/agent.rs
++++ b/crates/goose/src/agents/agent.rs
+@@ -2992,7 +2992,7 @@ impl Agent {
+                             if matching_ids.len() == 2 {
+                                 for id in &matching_ids {
+                                     session_manager.update_message_metadata(&session_config.id, id, |metadata| {
+-                                        metadata.with_agent_invisible()
++                                        metadata.with_agent_archived()
+                                     }).await?;
+                                 }
+                                 session_manager.add_message(&session_config.id, &summary_msg).await?;
+diff --git a/crates/goose/src/context_mgmt/mod.rs b/crates/goose/src/context_mgmt/mod.rs
+index 9497f962a..ae28d69c3 100644
+--- a/crates/goose/src/context_mgmt/mod.rs
++++ b/crates/goose/src/context_mgmt/mod.rs
+@@ -145,7 +145,7 @@ pub async fn compact_messages(
+     let mut final_messages = Vec::new();
+ 
+     for msg in messages_to_compact {
+-        let updated_metadata = msg.metadata.clone().with_agent_invisible();
++        let updated_metadata = msg.metadata.clone().with_agent_archived();
+         let updated_msg = msg.clone().with_metadata(updated_metadata);
+         final_messages.push(updated_msg);
+     }
+@@ -927,6 +927,7 @@ mod tests {
+             .find(|message| message.is_user_visible())
+             .unwrap();
+         assert!(!archived.is_agent_visible());
++        assert!(archived.metadata.historically_agent_visible);
+         assert!(archived.as_concat_text().contains("user-only secret"));
+         let replay = preserved_copies
+             .iter()
+diff --git a/crates/goose/tests/agent.rs b/crates/goose/tests/agent.rs
+index 8243d4035..fde05318a 100644
+--- a/crates/goose/tests/agent.rs
++++ b/crates/goose/tests/agent.rs
+@@ -1064,6 +1064,12 @@ mod tests {
+                 "Expected 20 invisible tool messages (10 summarized pairs), got {}",
+                 invisible_tool_msgs.len()
+             );
++            assert!(
++                invisible_tool_msgs
++                    .iter()
++                    .all(|message| message.metadata.historically_agent_visible),
++                "summarized tool messages must retain prior-disclosure provenance"
++            );
+ 
+             // Summaries must appear before the current turn's reply, not after it
+             let agent_visible: Vec<&Message> = messages
