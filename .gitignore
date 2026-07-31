@@ -28,6 +28,7 @@ htmlcov/
 .env
 .env.local
 .sandbox/
+/dev-notes-private/
 
 # Editors and operating systems
 .idea/

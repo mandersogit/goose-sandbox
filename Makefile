@@ -1,4 +1,4 @@
-.PHONY: help install test lint lint-fix typecheck format all apptainer-image apptainer-context-image test-apptainer-contextfs goose-patches goose goose-mcp-sdk goose-fastmcp
+.PHONY: help install test lint lint-fix typecheck format all apptainer-image apptainer-context-image test-apptainer-contextfs test-real-session-contextfs goose-patches goose goose-mcp-sdk goose-fastmcp
 
 PYTHON ?= python3
 VENV := local.venv
@@ -22,6 +22,7 @@ help:
 	@echo "  apptainer-image  Build and check the rootless arm64 sandbox SIF"
 	@echo "  apptainer-context-image  Build and test the ContextFS proof SIF"
 	@echo "  test-apptainer-contextfs  Re-test an existing ContextFS proof SIF"
+	@echo "  test-real-session-contextfs  Test a configured real Goose session through FUSE"
 	@echo "  goose-patches  Apply the history-provenance patch to GOOSE_SOURCE_DIR or goose-dev"
 	@echo "  goose        Run Goose with the official SDK adapter; pass ARGS='session ...'"
 	@echo "  goose-mcp-sdk  Run Goose with the official SDK adapter"
@@ -58,6 +59,10 @@ apptainer-context-image:
 
 test-apptainer-contextfs:
 	scripts/test-apptainer-contextfs.sh
+
+test-real-session-contextfs:
+	test -n "$(SANDBOXED_GOOSE_REAL_SESSION_FIXTURE)"
+	$(PYTEST) -q tests/test_real_session_contextfs.py
 
 goose-patches:
 	scripts/apply-goose-patches.sh

@@ -37,6 +37,7 @@ dev = [
 
 [project.scripts]
 sandboxed-goose-contextfs = "sandboxed_goose.contextfs.__main__:main"
+sandboxed-goose-read-context = "sandboxed_goose.contextfs.reader:main"
 sandboxed-goose-export-session = "sandboxed_goose.contextfs.goose_session:main"
 sandboxed-goose-fastmcp = "sandboxed_goose.fastmcp.__main__:main"
 sandboxed-goose-mcp = "sandboxed_goose.mcp_sdk.__main__:main"

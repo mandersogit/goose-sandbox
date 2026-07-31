@@ -36,6 +36,7 @@ From: {{ base_image }}
     chown root:root /run/sandboxed-goose/session-context.json
     chmod 0400 /run/sandboxed-goose/session-context.json
     chmod 0555 /usr/local/bin/sandboxed-goose-contextfs
+    chmod 0555 /usr/local/bin/sandboxed-goose-read-context
 
     rm -f /opt/sandboxed_goose-0.0.1-py3-none-any.whl
     apt-get clean
@@ -47,6 +48,7 @@ From: {{ base_image }}
 
     python3 -c 'import pyfuse3, trio; assert pyfuse3.__version__'
     sandboxed-goose-contextfs --help >/dev/null
+    sandboxed-goose-read-context --help >/dev/null
     test -d /context
     test -f /run/sandboxed-goose/session-context.json
     test ! -e /context/manifest.json

@@ -24,6 +24,12 @@ export GOOSE_PATH_ROOT="${GOOSE_PATH_ROOT:-$PROJECT_ROOT/.sandbox/goose}"
 export GOOSE_DISABLE_KEYRING="${GOOSE_DISABLE_KEYRING:-true}"
 export GOOSE_TELEMETRY_ENABLED="${GOOSE_TELEMETRY_ENABLED:-false}"
 
+if [[ "${SANDBOXED_GOOSE_SESSION_CONTEXT_TRANSPORT:-direct}" == "apptainer-fuse" ]]; then
+  export SANDBOXED_GOOSE_CONTEXT_IMAGE="${SANDBOXED_GOOSE_CONTEXT_IMAGE:-$PROJECT_ROOT/.sandbox/apptainer/images/sandbox-python-context-arm64.sif}"
+  export SANDBOXED_GOOSE_APPTAINER_CONFIG="${SANDBOXED_GOOSE_APPTAINER_CONFIG:-$PROJECT_ROOT/containers/apptainer/apptainer-hostile-context.conf}"
+  export SANDBOXED_GOOSE_APPTAINER_STATE="${SANDBOXED_GOOSE_APPTAINER_STATE:-$PROJECT_ROOT/.sandbox/apptainer}"
+fi
+
 if [[ "$GOOSE_PATH_ROOT" != /* ]]; then
   echo "error: GOOSE_PATH_ROOT must be absolute: $GOOSE_PATH_ROOT" >&2
   exit 2

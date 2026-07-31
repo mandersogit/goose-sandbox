@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from sandboxed_goose.config import Settings
+from sandboxed_goose.config import (
+    APPTAINER_FUSE_SESSION_CONTEXT_TRANSPORT,
+    DIRECT_SESSION_CONTEXT_TRANSPORT,
+    Settings,
+)
+from sandboxed_goose.contextfs.apptainer import render_projection_via_apptainer
 from sandboxed_goose.contextfs.goose_session import (
     project_goose_session,
     render_projection_path,
@@ -35,4 +40,16 @@ def render_session_context(
             "SANDBOXED_GOOSE_SESSION_DATABASE"
         )
     projection = project_goose_session(settings.session_database, session_id)
-    return render_projection_path(projection, path, offset=offset, limit=limit)
+    if settings.session_context_transport == DIRECT_SESSION_CONTEXT_TRANSPORT:
+        return render_projection_path(projection, path, offset=offset, limit=limit)
+    if settings.session_context_transport == APPTAINER_FUSE_SESSION_CONTEXT_TRANSPORT:
+        return render_projection_via_apptainer(
+            settings,
+            projection,
+            path,
+            offset=offset,
+            limit=limit,
+        )
+    raise ProjectionError(
+        f"unsupported session context transport: {settings.session_context_transport!r}"
+    )

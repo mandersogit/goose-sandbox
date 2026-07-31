@@ -15,7 +15,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from sandboxed_goose.contextfs.bundle import write_bundle
-from sandboxed_goose.contextfs.model import ProjectionError, Snapshot
+from sandboxed_goose.contextfs.model import (
+    MAX_DEPTH,
+    MAX_NAME_BYTES,
+    ProjectionError,
+    Snapshot,
+)
 
 PROJECTION_SCHEMA_VERSION = 1
 MAX_PROJECTED_MESSAGES = 256
@@ -263,7 +268,7 @@ def render_projection_path(
         raise ProjectionError("offset must be non-negative")
     if not 1 <= limit <= 64 * 1024:
         raise ProjectionError("limit must be between 1 and 65536 bytes")
-    normalized_path = _normalize_requested_path(path)
+    normalized_path = normalize_requested_path(path)
 
     if normalized_path in projection.files:
         content = projection.files[normalized_path]
@@ -678,7 +683,11 @@ def _truncate_text(value: str, max_bytes: int, marker: str) -> str:
     return prefix.decode("utf-8", errors="ignore") + marker
 
 
-def _normalize_requested_path(path: str) -> str:
+def normalize_requested_path(path: str) -> str:
+    """Normalize an MCP path while confining it beneath ``/context``."""
+
+    if not isinstance(path, str):
+        raise ProjectionError("projected path must be a string")
     value = path.strip()
     if value in {"", "/", "/context"}:
         return ""
@@ -691,6 +700,14 @@ def _normalize_requested_path(path: str) -> str:
     parts = value.split("/")
     if any(part in {"", ".", ".."} or "\x00" in part for part in parts):
         raise ProjectionError("projected path contains an invalid component")
+    if len(parts) > MAX_DEPTH:
+        raise ProjectionError(f"projected path exceeds depth {MAX_DEPTH}")
+    try:
+        oversized = any(len(part.encode("utf-8")) > MAX_NAME_BYTES for part in parts)
+    except UnicodeEncodeError as error:
+        raise ProjectionError("projected path is not valid UTF-8") from error
+    if oversized:
+        raise ProjectionError(f"projected path component exceeds {MAX_NAME_BYTES} bytes")
     return "/".join(parts)
 
 
