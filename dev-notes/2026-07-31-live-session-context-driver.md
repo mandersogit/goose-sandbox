@@ -4,8 +4,11 @@
 > provenance-patch experiment. New supported runs use stock, unmodified Goose and
 > force tool-pair summarization off. The driver's optional `--goose-source` input now
 > records only a clean stock checkout; it does not require or accept a locally modified
-> patch checkout. Historical recovery under enabled summarization is planned, not yet
-> claimed, in `2026-07-31-tool-pair-summarization-hardening-plan.md`.
+> patch checkout. Atomic disclosure-ledger capture is now implemented and verified
+> with stock Goose, but the projector does not consume it yet. Recovery under enabled
+> summarization therefore remains unclaimed pending the operation-pinned-view and
+> ledger-backed projection work in
+> `2026-07-31-tool-pair-summarization-hardening-plan.md`.
 
 The sustained driver is implemented in `sandboxed_goose.live_test`. It separates two
 phases over one isolated Goose root and exact session ID; the audit phase resumes the

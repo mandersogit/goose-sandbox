@@ -1,6 +1,6 @@
 # Design
 
-**Status:** draft scaffold
+**Status:** implemented MCP/context prototype; execution sandbox remains a draft
 
 ## Goal
 
@@ -51,9 +51,13 @@ Goose is launched with `--no-profile` and exactly one `--with-extension` argumen
 - Stock, unmodified Goose is the supported runtime. The current projector excludes
   agent-invisible stock rows because it cannot distinguish archived former context from
   never-disclosed content; the launcher forces tool-pair summarization off.
-- The planned defensive path uses project-owned atomic SQLite disclosure-ledger
-  triggers rather than a Goose source patch. Until that lands, archived-history
-  recovery is incomplete but remains fail-closed.
+- Both MCP entry points now atomically install and verify project-owned, namespaced
+  SQLite disclosure-ledger tables and triggers before starting stdio. The ledger
+  captures a managed row while it is visible and again before a visibility transition,
+  without requiring a Goose source patch.
+- The projector does not consume ledger entries yet. Archived-history recovery remains
+  fail-closed until bounded operation-pinned views and the validated stock-row/ledger
+  merge are implemented.
 - No read, write, or shell tools until a real backend is selected and tested.
 - Hostile Linux commands use an independent workspace snapshot, immutable runtime,
   offline network namespace, seccomp, cgroup limits, hard storage quotas, and reviewed

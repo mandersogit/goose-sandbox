@@ -2,9 +2,10 @@
 
 > **Historical prototype note:** This document records the first projection and its
 > live verification, including an experimental Goose provenance patch. The supported
-> runtime contract is now stock, unmodified Goose. Stock Goose safely exposes only
-> currently agent-visible rows; durable recovery of rows later hidden by summarization
-> or compaction awaits the project-owned disclosure ledger described in
+> runtime contract is now stock, unmodified Goose. Project-owned ledger capture is
+> implemented for managed sessions, but the current projector does not consume it;
+> stock-Goose projections therefore still expose only currently agent-visible rows.
+> Operation-pinned views and the ledger-backed merge remain in
 > `2026-07-31-tool-pair-summarization-hardening-plan.md`. The patch remains optional
 > development evidence, not an installation, runtime, or acceptance prerequisite.
 
@@ -27,8 +28,9 @@ Request metadata is authoritative. If both values exist and disagree, the tool f
 closed. There is no “latest session” fallback, database scan for a plausible session,
 or model-supplied session selector.
 
-Historical recovery did require a small Goose provenance change. The standalone patch
-at `patches/goose/0001-preserve-agent-visible-history-provenance.patch` adds
+For this historical prototype, recovery required a small Goose provenance change. The
+standalone patch at
+`patches/goose/0001-preserve-agent-visible-history-provenance.patch` adds
 `historicallyAgentVisible` and records it only when compaction or tool-pair
 summarization archives a row that is currently agent-visible. `make goose-patches`
 applies the patch idempotently to `GOOSE_SOURCE_DIR` or the repository's `goose-dev`
@@ -167,5 +169,7 @@ endpoint. The separate live-inference test remains postponed.
 This remains a projection and transport proof, not authorization to register hostile
 Bash. The missing gates include the final sandbox supervisor, whole-cgroup lifetime,
 hard workspace/scratch quotas, default-deny seccomp, comprehensive hostile filesystem
-tests, and protected broker/supervisor lifecycle integration. Pre-patch compacted rows
-remain intentionally unrecoverable because they lack safe disclosure provenance.
+tests, and protected broker/supervisor lifecycle integration. The supported stock
+projector does not yet consume the project-owned ledger, so rows that have become
+agent-invisible remain unavailable. Full-compaction deletion also advances the
+conservative ledger coverage epoch and needs its separate lifecycle gate.

@@ -90,6 +90,14 @@ three namespaced tools. A second deterministic run makes Goose call
 session from Goose's SQLite store. It requires neither provider credentials nor
 internet access.
 
+For a Goose-bound process, both adapters atomically install and verify the same
+project-owned disclosure ledger in that isolated SQLite store before starting their
+stdio protocol loop. The ledger records the last disclosed form of currently visible
+rows and captures it before a later visibility transition. Missing, altered,
+incomplete, or over-quota ledger state fails startup or the corresponding Goose write
+closed. A manual MCP process without `AGENT_SESSION_ID` can still be used for tool-list
+inspection and does not touch a Goose database.
+
 The wrapper uses a project-local Goose root at `.sandbox/goose` by setting
 `GOOSE_PATH_ROOT`. The isolated root contains separate `config`, `data`, and `state`
 directories and is ignored by Git. Override it only with another absolute path:
@@ -238,13 +246,16 @@ SQLite source-row IDs, so Goose history compaction cannot make a path refer to a
 different message. The `ordinal` and `contextVisibility` fields remain
 snapshot-relative, and the oracle validates the exact values returned by the tool.
 
-The supported runtime contract is stock, unmodified Goose. The current projector
-exposes only currently visible rows from stock Goose; once stock Goose archives a row,
-the row is ambiguous and remains excluded. The launcher therefore forces tool-pair
-summarization off. The tracked provenance patch is retained only as a development
-reference, not as an installation requirement. The
+The supported runtime contract is stock, unmodified Goose. Project-managed sessions
+now acquire prior-disclosure evidence through the atomic ledger, without changing
+Goose. The current projector deliberately does not consume that evidence until
+operation-pinned views and the ledger merge are complete, so its public stock-Goose
+output still excludes rows after they become agent-invisible. The launcher therefore
+continues to force tool-pair summarization off. The tracked provenance patch is
+retained only as historical development evidence, not as an installation or
+acceptance requirement. The
 [hardening plan](dev-notes/2026-07-31-tool-pair-summarization-hardening-plan.md)
-replaces that dependency with a project-owned atomic disclosure ledger.
+records the completed capture layer and the remaining projection work.
 
 Chronological implementation findings and local verification are recorded in
 [dev-notes](dev-notes/README.md).

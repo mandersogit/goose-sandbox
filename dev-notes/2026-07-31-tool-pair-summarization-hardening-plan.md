@@ -25,11 +25,13 @@ The revised decision is:
   live language model is optional smoke coverage only.
 
 The current projector remains disclosure-safe because it fails closed on unproven
-rows and reads each projection in one SQLite transaction. With stock Goose it cannot
-recover rows after Goose marks them agent-invisible, because stock metadata contains no
-proof that those rows were previously disclosed. It is not yet consistency- or
-availability-hardened for repeated concurrent summarization, multi-call traversal, or
-history beyond the recent window.
+rows and reads each projection in one SQLite transaction. The project-owned ledger now
+captures future prior-disclosure proof, but the current projector deliberately does not
+consume those rows until operation-pinned views and their verification boundary are in
+place. It therefore still cannot recover a stock row after Goose marks it
+agent-invisible. The projection is not yet consistency- or availability-hardened for
+repeated concurrent summarization, multi-call traversal, or history beyond the recent
+window.
 
 ## Test foundation implemented
 
@@ -58,23 +60,59 @@ The following implementation-independent test foundation now exists:
 
 The real control test passed against a clean build of upstream commit
 `ee61c7c499dbf08786a75948d949639cbab14150`, made from `git archive HEAD`; the tested
-binary contained no project provenance patch. The ordinary suite leaves this test
-skipped unless `GOOSE_BIN` names an executable. Run it explicitly with:
+binary contained no project provenance patch. It was rerun after ledger startup and
+capture were implemented: the no-tool initialization request established the managed
+session before the first provider request, disabled mode produced no archive captures,
+and enabled mode retained the exact pre-archive forms of all twenty originals in the
+ten-pair batch. The ordinary suite leaves this test skipped unless `GOOSE_BIN` names an
+executable. Run it explicitly with:
 
 ```bash
 GOOSE_BIN=/absolute/path/to/stock/goose \
   local.venv/bin/pytest -q tests/test_goose_summarization_controls.py
 ```
 
-These tests establish the input and control oracles. They do not claim that the
-disclosure ledger, operation-pinned views, or repeated fifty-batch acceptance gate has
-already been implemented.
+These tests establish the input and control oracles. They do not claim that
+operation-pinned views, ledger-backed projection, or the repeated fifty-batch
+acceptance gate has already been implemented.
 
-At this commit-plan checkpoint, `make all` passes Ruff, mypy, Pyright, and the complete
-ordinary suite: 101 tests passed and 9 explicitly configured integration tests were
-skipped because their external runtimes were not selected. The real summarization
-control described above was run separately with `GOOSE_BIN` pointing at the clean
-stock build.
+## Ledger implementation checkpoint
+
+`sandboxed_goose.contextfs.disclosure_ledger` now implements ledger schema version 1:
+
+- fifteen exact, fingerprinted, namespaced SQLite tables and static triggers, recorded
+  in `tests/fixtures/disclosure-ledger-v1.json`;
+- one `BEGIN IMMEDIATE` bootstrap that validates the pinned stock schema, registers
+  exactly the bound session, seeds only currently agent-visible rows, and rolls back
+  the whole installation if coverage cannot fit;
+- persistent insert, visible-update, and pre-archive capture that remains active while
+  the MCP process is absent and never imports an already invisible row;
+- nondeletable physical/epoch entries that refresh in place only while their source is
+  visible, exact row/byte accounting, hard per-field and per-session limits, and bounded
+  omission records for oversized source fields;
+- transaction-aborting quota and unavailable-state failures, so a stock Goose insert,
+  visible update, or visibility transition cannot commit after losing its last
+  disclosed form; and
+- conservative coverage-epoch advancement on deletion or session movement, with old
+  epochs retained but ineligible for future projection.
+
+Both stdio entry points run the shared bootstrap before starting their framework's
+protocol loop. Direct protocol tests prove that the ledger exists before either server
+advertises tools. A manual MCP launch without `AGENT_SESSION_ID` remains available for
+tool-list inspection; once Goose supplies that binding, a missing database or invalid
+ledger fails startup.
+
+Fifteen ledger state-machine tests cover bootstrap idempotence and rollback,
+cross-session isolation, persistent capture, invisible-to-visible transitions,
+archive-at-quota UPSERT behavior, row and byte rollback, omission records, deletion
+epochs, append-only enforcement, altered objects, accounting corruption, and immutable
+installed limits. The projector does not expose ledger entries yet; that remains behind
+the operation-pinned-view work.
+
+At this checkpoint, `make all` passes Ruff, mypy, Pyright, and the complete ordinary
+suite: 122 tests passed and 9 explicitly configured integration tests were skipped
+because their external runtimes were not selected. The real summarization control
+described above was run separately with `GOOSE_BIN` pointing at the clean stock build.
 
 ## Verified Goose writer contract
 
@@ -577,13 +615,14 @@ separate full-compaction gate remains open.
 
 ## Implementation order
 
-1. Implement and verify the stock-Goose ledger schema, atomic triggers, bootstrap,
-   coverage epochs, and accounting against the canonical fixture. Do not expose ledger
-   rows through the current projector yet.
-2. Integrate ledger bootstrap and verification into both MCP startup paths, and prove it
-   finishes before the first provider request even when the model never calls a tool.
-3. Add operation request/result types and the bounded `SessionViewStore`; test token
-   binding, eviction, expiry, and resource limits.
+1. **Complete:** Implement and verify the stock-Goose ledger schema, atomic triggers,
+   bootstrap, coverage epochs, and accounting against the canonical fixture. Do not
+   expose ledger rows through the current projector yet.
+2. **Complete:** Integrate ledger bootstrap and verification into both MCP startup
+   paths, and prove it finishes before the first provider request even when the model
+   never calls a tool.
+3. **Next:** Add operation request/result types and the bounded `SessionViewStore`;
+   test token binding, eviction, expiry, and resource limits.
 4. Refactor projection to operation-aware descriptor queries and minimal bundles before
    adding new identity files.
 5. Add the public v2 envelope builder and typed MCP errors; keep both adapters in sync
@@ -597,8 +636,8 @@ separate full-compaction gate remains open.
    accurate failure injection.
 9. Add the real-Goose multi-call workflow, WAL concurrency suite, and direct/FUSE
    parity suite.
-10. Extend the existing real-wrapper disabled regression and enabled inverse control to
-    assert ledger startup ordering and enabled-mode capture.
+10. **Complete early:** Extend the existing real-wrapper disabled regression and
+    enabled inverse control to assert ledger startup ordering and enabled-mode capture.
 11. Run the optional live smoke only after deterministic acceptance passes.
 
 Do not retain intentionally failing tests in commits. Land each characterization test

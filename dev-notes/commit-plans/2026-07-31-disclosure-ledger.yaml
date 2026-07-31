@@ -1,0 +1,48 @@
+commits:
+  - message: |
+      feat: install the stock Goose disclosure ledger
+
+      Add a versioned, fingerprinted SQLite ledger whose static triggers retain
+      the last agent-visible form of managed-session messages and fail Goose
+      writes closed on quota or integrity failures. Bootstrap and verify the
+      exact session atomically before either MCP adapter starts its stdio loop,
+      without requiring a modified Goose binary.
+    files:
+      - src/sandboxed_goose/contextfs/disclosure_ledger.py
+      - src/sandboxed_goose/stdio_startup.py
+      - src/sandboxed_goose/fastmcp/__main__.py
+      - src/sandboxed_goose/mcp_sdk/__main__.py
+
+  - message: |
+      test: verify atomic disclosure capture
+
+      Pin the ledger schema and trigger definitions, exercise bootstrap,
+      capture, quota, tamper, deletion, and isolation state transitions, and
+      verify both adapters establish the ledger before advertising tools.
+      Extend the stock-Goose controls to prove disabled-mode silence and
+      enabled-mode preservation of every archived tool-pair original.
+    files:
+      - tests/fixtures/disclosure-ledger-v1.json
+      - tests/test_disclosure_ledger.py
+      - tests/test_stdio_startup.py
+      - tests/test_stdio.py
+      - tests/test_goose_summarization_controls.py
+      - tests/test_goose_tools.py
+
+  - message: |
+      docs: record the disclosure ledger checkpoint
+
+      Bring the public guides and historical notes up to date: stock Goose is
+      the supported runtime, ledger capture and startup ordering are complete,
+      and ledger-backed projection remains deliberately gated on bounded
+      operation-pinned views. Preserve the old Goose patch only as historical
+      comparison evidence and mark the next hardening step explicitly.
+    files:
+      - README.md
+      - dev-notes/2026-07-31-goose-session-context-projection.md
+      - dev-notes/2026-07-31-live-session-context-driver.md
+      - dev-notes/2026-07-31-tool-pair-summarization-hardening-plan.md
+      - dev-notes/commit-plans/2026-07-31-disclosure-ledger.yaml
+      - docs/APPTAINER.md
+      - docs/DESIGN.md
+      - patches/goose/README.md

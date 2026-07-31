@@ -464,9 +464,12 @@ Goose state root, or a directory that could reveal another session.
 Stock, unmodified Goose is the supported runtime. The current exporter safely exposes
 current rows only; a stock row made agent-invisible by summarization or compaction has
 no trustworthy prior-disclosure marker and remains excluded. Project-managed launches
-therefore force tool-pair summarization off. Defensive recovery under accidentally
-enabled summarization will use a project-owned atomic disclosure ledger, not a patched
-Goose binary.
+therefore force tool-pair summarization off. Both MCP startup paths now atomically
+install and verify a project-owned disclosure ledger that preserves future
+prior-disclosure evidence under stock Goose. The exporter deliberately does not read
+that ledger yet; recovery under accidentally enabled summarization remains unavailable
+until operation-pinned views and ledger-backed projection are implemented. No patched
+Goose binary is part of the supported runtime.
 
 The current context-enabled SIF has SHA-256:
 

@@ -4,6 +4,11 @@ This patch is retained as a development experiment and reference. It is not part
 the supported product runtime, which must work with stock, unmodified Goose. Do not
 build deployment assumptions or acceptance tests around this patch.
 
+The supported replacement capture mechanism is now the project-owned disclosure
+ledger installed by both MCP startup paths. The current projector does not consume
+ledger history yet, so the patch remains comparison evidence rather than a shortcut
+around the operation-pinned-view and ledger-integration work.
+
 `0001-preserve-agent-visible-history-provenance.patch` was developed and verified
 against Goose commit `ee61c7c499dbf08786a75948d949639cbab14150` (version `1.45.0`).
 
