@@ -1,0 +1,87 @@
+{
+  "artifact_schema_version": 1,
+  "goose_commit": "ee61c7c499dbf08786a75948d949639cbab14150",
+  "messages_table_sql": "CREATE TABLE IF NOT EXISTS messages (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    message_id TEXT,\n    session_id TEXT NOT NULL REFERENCES sessions(id),\n    role TEXT NOT NULL,\n    content_json TEXT NOT NULL,\n    created_timestamp INTEGER NOT NULL,\n    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    tokens INTEGER,\n    metadata_json TEXT\n)",
+  "messages_columns": [
+    ["id", "INTEGER", false, null, true],
+    ["message_id", "TEXT", false, null, false],
+    ["session_id", "TEXT", true, null, false],
+    ["role", "TEXT", true, null, false],
+    ["content_json", "TEXT", true, null, false],
+    ["created_timestamp", "INTEGER", true, null, false],
+    ["timestamp", "TIMESTAMP", false, "CURRENT_TIMESTAMP", false],
+    ["tokens", "INTEGER", false, null, false],
+    ["metadata_json", "TEXT", false, null, false]
+  ],
+  "metadata_examples": {
+    "visible": {
+      "userVisible": true,
+      "agentVisible": true
+    },
+    "agent_only": {
+      "userVisible": false,
+      "agentVisible": true
+    },
+    "user_only": {
+      "userVisible": true,
+      "agentVisible": false
+    },
+    "stock_archived": {
+      "userVisible": true,
+      "agentVisible": false
+    }
+  },
+  "content_examples": {
+    "tool_request": [
+      {
+        "type": "toolRequest",
+        "id": "tool-000",
+        "toolCall": {
+          "status": "success",
+          "value": {
+            "name": "calculate",
+            "arguments": {
+              "expression": "0+0"
+            }
+          }
+        }
+      }
+    ],
+    "tool_response": [
+      {
+        "type": "toolResponse",
+        "id": "tool-000",
+        "toolResult": {
+          "status": "success",
+          "value": {
+            "content": [
+              {
+                "type": "text",
+                "text": "0"
+              }
+            ],
+            "isError": false
+          }
+        }
+      }
+    ],
+    "tool_summary": [
+      {
+        "type": "text",
+        "text": "summary for tool-000"
+      }
+    ]
+  },
+  "tool_pair_summarization": {
+    "batch_size": 10,
+    "control_cutoff": 2,
+    "eligible_pairs_for_one_batch": 13,
+    "apply_commit_order": [
+      "archive_request",
+      "archive_response",
+      "insert_summary"
+    ],
+    "summary_role": "user",
+    "summary_created_timestamp_source": "tool_response"
+  }
+}
