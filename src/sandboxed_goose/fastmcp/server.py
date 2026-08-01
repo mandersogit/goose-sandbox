@@ -8,6 +8,7 @@ from fastmcp import Context, FastMCP
 
 from sandboxed_goose import __version__
 from sandboxed_goose.config import Settings
+from sandboxed_goose.contextfs.view_store import SessionViewStore
 from sandboxed_goose.contract import SERVER_INSTRUCTIONS, SERVER_NAME
 from sandboxed_goose.session_binding import resolve_session_id
 from sandboxed_goose.tools import (
@@ -23,6 +24,7 @@ from sandboxed_goose.tools import (
 def build_server(settings: Settings | None = None) -> FastMCP[None]:
     """Build the fail-closed server using standalone FastMCP."""
     active_settings = settings if settings is not None else Settings.from_environment()
+    view_store = SessionViewStore()
     server = FastMCP[None](
         SERVER_NAME,
         version=__version__,
@@ -53,14 +55,21 @@ def build_server(settings: Settings | None = None) -> FastMCP[None]:
         offset: int = 0,
         limit: int = 64 * 1024,
         tail: bool = False,
+        view_id: str = "",
     ) -> str:
         request_context = ctx.request_context
         raw_meta = request_context.meta if request_context is not None else None
         meta: Mapping[str, object] | None = raw_meta
         session_id = resolve_session_id(meta)
-        return render_session_context(active_settings, session_id, path, offset, limit, tail)
+        return render_session_context(
+            active_settings,
+            session_id,
+            path,
+            offset,
+            limit,
+            tail,
+            view_id or None,
+            view_store,
+        )
 
     return server
-
-
-mcp = build_server()

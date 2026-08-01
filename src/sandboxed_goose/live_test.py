@@ -28,6 +28,11 @@ from sandboxed_goose.contextfs.goose_session import (
     MESSAGE_PATH_PREFIX,
     project_goose_session,
 )
+from sandboxed_goose.contextfs.operation_projection import (
+    OPERATION_PROJECTION_SCHEMA_VERSION,
+    query_session_operation_descriptors,
+)
+from sandboxed_goose.contextfs.view_store import SessionOperation, SessionOperationRequest
 
 PROJECT_ROOT: Final = Path(__file__).resolve().parents[2]
 DEFAULT_LIVE_ROOT: Final = PROJECT_ROOT / ".sandbox" / "live-tests"
@@ -99,12 +104,10 @@ class AuditTarget:
 
     path: str
     payload: Mapping[str, object]
-    ordinal: int
     source_row_id: int
     message_id: str | None
     role: str
     created_at: str
-    context_visibility: str
 
 
 def _utc_now() -> str:
@@ -864,21 +867,30 @@ def select_audit_target(database: Path, session_id: str, marker: str) -> AuditTa
         raise LiveTestError(
             f"expected exactly one projected message containing audit target marker {marker!r}"
         )
-    path, payload = matches[0]
+    path, _legacy_payload = matches[0]
+    result = query_session_operation_descriptors(
+        database,
+        SessionOperationRequest(
+            session_id=session_id,
+            operation=SessionOperation.EXACT_OBJECT,
+            path=path,
+            projection_schema_version=OPERATION_PROJECTION_SCHEMA_VERSION,
+        ),
+    )
+    payload = _require_mapping(
+        _json_loads(result.file_bytes(path), path),
+        path,
+    )
     message_id = payload.get("messageId")
     if message_id is not None and not isinstance(message_id, str):
         raise LiveTestError("audit target messageId has an invalid type")
     return AuditTarget(
         path=path,
         payload=payload,
-        ordinal=_require_int(payload.get("ordinal"), "audit target ordinal"),
         source_row_id=_require_int(payload.get("sourceRowId"), "audit target sourceRowId"),
         message_id=message_id,
         role=_require_string(payload.get("role"), "audit target role"),
         created_at=_require_string(payload.get("createdAt"), "audit target createdAt"),
-        context_visibility=_require_string(
-            payload.get("contextVisibility"), "audit target contextVisibility"
-        ),
     )
 
 
@@ -887,12 +899,10 @@ def audit_expected_result(target: AuditTarget, marker: str, task: int) -> Mappin
         "marker": marker,
         "task": task,
         "target_path": target.path,
-        "ordinal": target.ordinal,
         "source_row_id": target.source_row_id,
         "message_id": target.message_id,
         "role": target.role,
         "created_at": target.created_at,
-        "context_visibility": target.context_visibility,
     }
 
 
@@ -902,7 +912,6 @@ def _audit_expected_line(expected: Mapping[str, object]) -> str:
         _require_string(expected.get("marker"), "audit marker"),
         str(_require_int(expected.get("task"), "audit task")),
         _require_string(expected.get("target_path"), "audit target path"),
-        str(_require_int(expected.get("ordinal"), "audit ordinal")),
         str(_require_int(expected.get("source_row_id"), "audit source row ID")),
         (
             "null"
@@ -911,7 +920,6 @@ def _audit_expected_line(expected: Mapping[str, object]) -> str:
         ),
         _require_string(expected.get("role"), "audit role"),
         _require_string(expected.get("created_at"), "audit creation time"),
-        _require_string(expected.get("context_visibility"), "audit context visibility"),
     ]
     if any(any(character.isspace() for character in value) for value in values):
         raise LiveTestError("audit line values must not contain whitespace")
@@ -923,12 +931,13 @@ def _observed_audit_result(
     target: AuditTarget,
     recovered: Mapping[str, object],
 ) -> Mapping[str, object]:
-    """Validate stable identity and derive the snapshot-relative values the model saw."""
+    """Validate the stable physical message file the model read."""
 
     stable_fields = (
         "schemaVersion",
         "sourceRowId",
         "messageId",
+        "messageIdStatus",
         "role",
         "created",
         "createdAt",
@@ -937,24 +946,14 @@ def _observed_audit_result(
     )
     if any(recovered.get(field) != target.payload.get(field) for field in stable_fields):
         raise LiveTestError("the model-visible target file changed stable message identity")
-    visibility = _require_string(
-        recovered.get("contextVisibility"), "observed audit context visibility"
-    )
-    if visibility not in {"current", "historical"}:
-        raise LiveTestError("observed audit context visibility is invalid")
-    ordinal = _require_int(recovered.get("ordinal"), "observed audit ordinal")
-    if ordinal < 1:
-        raise LiveTestError("observed audit ordinal must be positive")
     return {
         "marker": _require_string(selected.get("marker"), "audit marker"),
         "task": _require_int(selected.get("task"), "audit task"),
         "target_path": target.path,
-        "ordinal": ordinal,
         "source_row_id": _require_int(recovered.get("sourceRowId"), "audit source row ID"),
         "message_id": recovered.get("messageId"),
         "role": _require_string(recovered.get("role"), "audit role"),
         "created_at": _require_string(recovered.get("createdAt"), "audit creation time"),
-        "context_visibility": visibility,
     }
 
 
@@ -1030,11 +1029,17 @@ def verify_audit_turn(
         previous_snapshot_id=previous_snapshot_id,
         previous_source_rows=previous_source_rows,
     )
-    refreshed = project_goose_session(database, session_id)
-    if target.path not in refreshed.files:
-        raise LiveTestError("the audit target path disappeared during the work turn")
+    refreshed = query_session_operation_descriptors(
+        database,
+        SessionOperationRequest(
+            session_id=session_id,
+            operation=SessionOperation.EXACT_OBJECT,
+            path=target.path,
+            projection_schema_version=OPERATION_PROJECTION_SCHEMA_VERSION,
+        ),
+    )
     refreshed_payload = _require_mapping(
-        _json_loads(refreshed.files[target.path], "refreshed audit target"),
+        _json_loads(refreshed.file_bytes(target.path), "refreshed audit target"),
         "refreshed audit target",
     )
     _observed_audit_result(expected_result, target, refreshed_payload)
@@ -1077,9 +1082,7 @@ def _audit_prompt(task: int, marker: str, target: AuditTarget) -> str:
         f"2. Read {target.path} with offset 0 and limit 65536.\n"
         "3. From that JSON file, return one space-delimited line with exactly these fields "
         "in order: the literal SGCTX_AUDIT_OK, the audit marker, task integer, target path, "
-        "ordinal, sourceRowId, messageId (or literal null), role, createdAt, and "
-        "contextVisibility. The ordinal and visibility must come from the file you just read; "
-        "they can change when Goose compacts the session.\n"
+        "sourceRowId, messageId (or literal null), role, and createdAt.\n"
         "Immediately after the file read, make no additional tool call. Do not use remembered "
         "conversation values. Return only that one plain-text line: no JSON object, braces, "
         "quotes, Markdown, or explanation."

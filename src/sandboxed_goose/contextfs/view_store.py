@@ -116,6 +116,8 @@ class LedgerCoverageIdentity:
     schema_version: int
     schema_fingerprint: str
     coverage_epoch: int
+    database_identity: str
+    session_incarnation: str
 
     def __post_init__(self) -> None:
         _validate_positive_int("ledger schema_version", self.schema_version)
@@ -127,6 +129,12 @@ class LedgerCoverageIdentity:
                 "ledger schema_fingerprint must be a lowercase 256-bit hexadecimal digest"
             )
         _validate_positive_int("coverage_epoch", self.coverage_epoch)
+        for name, value in (
+            ("database_identity", self.database_identity),
+            ("session_incarnation", self.session_incarnation),
+        ):
+            if not isinstance(value, str) or _SNAPSHOT_ID_PATTERN.fullmatch(value) is None:
+                raise ValueError(f"{name} must be a lowercase 256-bit hexadecimal digest")
 
 
 @dataclass(frozen=True, slots=True)
@@ -367,7 +375,11 @@ class SessionViewStore:
         with self._lock:
             now = self._now()
             self._expire_idle(now)
-            if not isinstance(view_id, str) or _VIEW_ID_PATTERN.fullmatch(view_id) is None:
+            if (
+                not isinstance(view_id, str)
+                or len(view_id) != VIEW_ID_BYTES * 2
+                or _VIEW_ID_PATTERN.fullmatch(view_id) is None
+            ):
                 raise ViewExpiredError("session view is unavailable; start a new operation")
             entry = self._views.get(view_id)
             if entry is None:

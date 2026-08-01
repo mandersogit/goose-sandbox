@@ -10,6 +10,7 @@ from mcp.server.mcpserver import Context
 
 from sandboxed_goose import __version__
 from sandboxed_goose.config import Settings
+from sandboxed_goose.contextfs.view_store import SessionViewStore
 from sandboxed_goose.contract import SERVER_INSTRUCTIONS, SERVER_NAME
 from sandboxed_goose.session_binding import resolve_session_id
 from sandboxed_goose.tools import (
@@ -25,6 +26,7 @@ from sandboxed_goose.tools import (
 def build_server(settings: Settings | None = None) -> MCPServer[dict[str, Any]]:
     """Build the fail-closed server using the official MCP SDK."""
     active_settings = settings if settings is not None else Settings.from_environment()
+    view_store = SessionViewStore()
     server: MCPServer[dict[str, Any]] = MCPServer(
         SERVER_NAME,
         version=__version__,
@@ -55,6 +57,7 @@ def build_server(settings: Settings | None = None) -> MCPServer[dict[str, Any]]:
         offset: int = 0,
         limit: int = 64 * 1024,
         tail: bool = False,
+        view_id: str = "",
     ) -> str:
         params = ctx.request_context.params
         raw_meta = params.get("_meta") if isinstance(params, Mapping) else None
@@ -64,9 +67,15 @@ def build_server(settings: Settings | None = None) -> MCPServer[dict[str, Any]]:
             else None
         )
         session_id = resolve_session_id(meta)
-        return render_session_context(active_settings, session_id, path, offset, limit, tail)
+        return render_session_context(
+            active_settings,
+            session_id,
+            path,
+            offset,
+            limit,
+            tail,
+            view_id or None,
+            view_store,
+        )
 
     return server
-
-
-mcp = build_server()
