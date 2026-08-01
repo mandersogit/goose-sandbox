@@ -1,0 +1,52 @@
+{
+  "artifact_schema_version": 2,
+  "ledger_schema_version": 2,
+  "schema_fingerprint": "b2caedc1f5d650203c52f9d7c06996914c7621357db19ad9620133efb03638ea",
+  "object_names": [
+    "sandboxed_goose_disclosure_accounting",
+    "sandboxed_goose_disclosure_entries",
+    "sandboxed_goose_disclosure_entry_insert_account",
+    "sandboxed_goose_disclosure_entry_insert_quota",
+    "sandboxed_goose_disclosure_entry_no_delete",
+    "sandboxed_goose_disclosure_entry_update_account",
+    "sandboxed_goose_disclosure_entry_update_quota",
+    "sandboxed_goose_disclosure_managed_sessions",
+    "sandboxed_goose_disclosure_message_delete",
+    "sandboxed_goose_disclosure_meta",
+    "sandboxed_goose_disclosure_pre_archive",
+    "sandboxed_goose_disclosure_session_delete",
+    "sandboxed_goose_disclosure_session_move",
+    "sandboxed_goose_disclosure_visible_insert",
+    "sandboxed_goose_disclosure_visible_update"
+  ],
+  "default_limits": {
+    "max_entries": 65536,
+    "max_stored_bytes": 268435456,
+    "max_content_bytes": 524288,
+    "max_metadata_bytes": 65536,
+    "max_message_id_bytes": 4096,
+    "max_role_bytes": 256
+  },
+  "omission_flags": {
+    "message_id": 1,
+    "role": 2,
+    "content": 4,
+    "metadata": 8,
+    "created_timestamp": 16
+  },
+  "capture_reasons": [
+    "bootstrap",
+    "visible-insert",
+    "visible-update",
+    "pre-archive"
+  ],
+  "coverage_reasons": [
+    "bootstrap-complete",
+    "preexisting-ambiguous-rows",
+    "message-delete",
+    "message-session-move",
+    "session-delete",
+    "capture-overflow",
+    "capture-unavailable"
+  ]
+}

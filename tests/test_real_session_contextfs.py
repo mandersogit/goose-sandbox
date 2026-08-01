@@ -19,10 +19,11 @@ from sandboxed_goose.config import (
     APPTAINER_FUSE_SESSION_CONTEXT_TRANSPORT,
     Settings,
 )
-from sandboxed_goose.contextfs.goose_session import project_goose_session
+from sandboxed_goose.contextfs.view_store import SessionViewStore
 from sandboxed_goose.fastmcp.server import build_server as build_fastmcp_server
 from sandboxed_goose.mcp_sdk.server import build_server as build_mcp_sdk_server
 from sandboxed_goose.session_binding import GOOSE_SESSION_META_KEY
+from sandboxed_goose.tools.session_context import render_session_context
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_ENV = "SANDBOXED_GOOSE_REAL_SESSION_FIXTURE"
@@ -215,27 +216,64 @@ async def test_real_many_turn_session_is_read_through_apptainer_fuse(
     fixture = _fixture()
     settings = _settings(fixture)
     session_id = fixture["primary_session_id"]
-    projection = project_goose_session(settings.session_database, session_id)
-    direct_manifest = json.loads(projection.files["manifest.json"])
-    all_projected_content = b"\n".join(projection.files.values()).decode("utf-8")
-    assert direct_manifest["source_message_rows"] >= fixture["primary_turns"] * 2
-    assert direct_manifest["projected_messages"] >= fixture["primary_turns"] * 2
-    assert f"{fixture['primary_marker_prefix']}_TURN_001" in all_projected_content
+    direct_settings = Settings(session_database=settings.session_database)
+    direct_store = SessionViewStore()
+    direct_root = json.loads(
+        render_session_context(direct_settings, session_id, view_store=direct_store)
+    )
+    direct_manifest_envelope = json.loads(
+        render_session_context(
+            direct_settings,
+            session_id,
+            path="manifest.json",
+            view_store=direct_store,
+        )
+    )
+    direct_manifest = json.loads(direct_manifest_envelope["content"])
+    direct_messages = json.loads(
+        render_session_context(
+            direct_settings,
+            session_id,
+            path="session/messages/by-source-row",
+            view_store=direct_store,
+        )
+    )
+    direct_transcript = bytearray()
+    direct_offset = 0
+    direct_view_id: str | None = None
+    while True:
+        direct_envelope = json.loads(
+            render_session_context(
+                direct_settings,
+                session_id,
+                path="session/transcript.md",
+                offset=direct_offset,
+                limit=1024,
+                view_id=direct_view_id,
+                view_store=direct_store,
+            )
+        )
+        direct_view_id = direct_envelope["view_id"]
+        direct_transcript.extend(direct_envelope["content"].encode())
+        next_offset = direct_envelope["next_offset"]
+        if next_offset is None:
+            break
+        direct_offset = next_offset
+
+    assert direct_manifest["counts"]["source_message_rows"] >= fixture["primary_turns"] * 2
+    assert direct_manifest["descriptor_count"] >= fixture["primary_turns"] * 2
+    assert f"{fixture['primary_marker_prefix']}_TURN_001" in direct_transcript.decode()
     assert (
         f"{fixture['primary_marker_prefix']}_TURN_{fixture['primary_turns']:03d}"
-        in all_projected_content
+        in direct_transcript.decode()
     )
-    assert fixture["decoy_marker"] not in all_projected_content
+    assert fixture["decoy_marker"] not in direct_transcript.decode()
 
     connections_before = _fuse_connections()
     async with Client(build_server(settings)) as client:
         root = await _call(client, session_id)
-        assert root["type"] == "directory"
-        assert {entry["name"] for entry in root["entries"]} == {
-            "README.md",
-            "manifest.json",
-            "session",
-        }
+        assert root["snapshot_id"] == direct_root["snapshot_id"]
+        assert root["entries"] == direct_root["entries"]
 
         manifest_envelope = await _call(
             client,
@@ -245,9 +283,11 @@ async def test_real_many_turn_session_is_read_through_apptainer_fuse(
             limit=65536,
         )
         assert json.loads(manifest_envelope["content"]) == direct_manifest
+        assert manifest_envelope["snapshot_id"] == direct_manifest_envelope["snapshot_id"]
 
         transcript = bytearray()
         offset = 0
+        transcript_view_id: str | None = None
         while True:
             envelope = await _call(
                 client,
@@ -255,21 +295,36 @@ async def test_real_many_turn_session_is_read_through_apptainer_fuse(
                 path="session/transcript.md",
                 offset=offset,
                 limit=1024,
+                view_id=transcript_view_id,
             )
+            transcript_view_id = envelope["view_id"]
             transcript.extend(envelope["content"].encode("utf-8"))
             next_offset = envelope["next_offset"]
             if next_offset is None:
                 break
             assert next_offset > offset
             offset = next_offset
-        assert bytes(transcript) == projection.files["session/transcript.md"]
+        assert transcript == direct_transcript
 
         messages = await _call(
             client,
             session_id,
             path="session/messages/by-source-row",
         )
-        assert len(messages["entries"]) == direct_manifest["projected_messages"]
+        assert messages["entries"] == direct_messages["entries"]
+
+        exact_path = f"session/messages/by-source-row/{messages['entries'][0]['name']}"
+        exact = await _call(client, session_id, path=exact_path)
+        direct_exact = json.loads(
+            render_session_context(
+                direct_settings,
+                session_id,
+                path=exact_path,
+                view_store=direct_store,
+            )
+        )
+        assert exact["content"] == direct_exact["content"]
+        assert exact["snapshot_id"] == direct_exact["snapshot_id"]
 
     assert _fuse_connections() == connections_before
     runs = settings.apptainer_state / "session-context-runs"
@@ -350,7 +405,7 @@ def test_real_goose_resumes_selected_session_and_calls_fuse_context(
     envelope = json.loads(tool_results[0])
     manifest = json.loads(envelope["content"])
     assert manifest["session_id"] == session_id
-    assert manifest["source_message_rows"] >= fixture["primary_turns"] * 2
+    assert manifest["counts"]["source_message_rows"] >= fixture["primary_turns"] * 2
     assert _fuse_connections() == connections_before
     runs = settings.apptainer_state / "session-context-runs"
     assert not runs.exists() or list(runs.iterdir()) == []

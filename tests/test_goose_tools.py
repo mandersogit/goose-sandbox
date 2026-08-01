@@ -339,12 +339,13 @@ def test_goose_binds_session_context_tool_to_the_active_session(
             text = block["toolResult"]["value"]["content"][0]["text"]
             envelope = json.loads(text)
             candidate = json.loads(envelope["content"])
-            if candidate.get("projection") == "goose-session-disclosed-history":
+            if candidate.get("projection") == "goose-session-operation-view":
                 manifest = candidate
 
     assert manifest is not None
     assert manifest["session_id"] == session_ids[0]
-    assert manifest["projected_messages"] >= 1
+    assert manifest["descriptor_count"] >= 1
+    assert manifest["counts"]["current_eligible_rows"] >= 1
     ledger = verify_disclosure_ledger(database, session_ids[0])
     assert ledger.session_id == session_ids[0]
     assert ledger.coverage_complete is True

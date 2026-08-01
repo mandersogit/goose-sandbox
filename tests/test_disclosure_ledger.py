@@ -18,14 +18,15 @@ from sandboxed_goose.contextfs.disclosure_ledger import (
     LEDGER_SCHEMA_VERSION,
     OBJECT_PREFIX,
     OMITTED_CONTENT,
+    OMITTED_CREATED_TIMESTAMP,
     OMITTED_MESSAGE_ID,
     OMITTED_METADATA,
     OMITTED_ROLE,
     SCHEMA_FINGERPRINT,
-    DisclosureLedgerOverflow,
     DisclosureLedgerUnavailable,
     LedgerLimits,
     bootstrap_disclosure_ledger,
+    open_verified_disclosure_snapshot,
     verify_disclosure_ledger,
 )
 from tests.support.stock_goose import (
@@ -53,10 +54,48 @@ def _ledger_rows(database: StockGooseDatabase, session_id: str) -> list[sqlite3.
         connection.close()
 
 
+def test_verified_snapshot_owns_one_read_transaction_and_always_closes(
+    stock_database: StockGooseDatabase,
+) -> None:
+    bootstrap_disclosure_ledger(stock_database.path, "primary")
+    captured: sqlite3.Connection | None = None
+    with open_verified_disclosure_snapshot(stock_database.path, "primary") as (
+        connection,
+        status,
+    ):
+        captured = connection
+        assert connection.in_transaction is True
+        assert status.session_id == "primary"
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM messages WHERE session_id = ?", ("primary",)
+            ).fetchone()[0]
+            == 0
+        )
+
+    assert captured is not None
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        captured.execute("SELECT 1")
+
+    failed: sqlite3.Connection | None = None
+    with (
+        pytest.raises(RuntimeError, match="consumer failure"),
+        open_verified_disclosure_snapshot(stock_database.path, "primary") as (
+            connection,
+            _status,
+        ),
+    ):
+        failed = connection
+        raise RuntimeError("consumer failure")
+    assert failed is not None
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        failed.execute("SELECT 1")
+
+
 def test_canonical_ledger_artifact_pins_schema_objects_limits_and_flags(
     stock_database: StockGooseDatabase,
 ) -> None:
-    artifact_path = Path(__file__).parent / "fixtures" / "disclosure-ledger-v1.json"
+    artifact_path = Path(__file__).parent / "fixtures" / "disclosure-ledger-v2.json"
     artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
     bootstrap_disclosure_ledger(stock_database.path, "primary")
     connection = stock_database.connect()
@@ -70,7 +109,7 @@ def test_canonical_ledger_artifact_pins_schema_objects_limits_and_flags(
     finally:
         connection.close()
 
-    assert artifact["artifact_schema_version"] == 1
+    assert artifact["artifact_schema_version"] == 2
     assert artifact["ledger_schema_version"] == LEDGER_SCHEMA_VERSION
     assert artifact["schema_fingerprint"] == SCHEMA_FINGERPRINT
     assert artifact["object_names"] == object_names
@@ -87,6 +126,7 @@ def test_canonical_ledger_artifact_pins_schema_objects_limits_and_flags(
         "role": OMITTED_ROLE,
         "content": OMITTED_CONTENT,
         "metadata": OMITTED_METADATA,
+        "created_timestamp": OMITTED_CREATED_TIMESTAMP,
     }
 
 
@@ -144,6 +184,32 @@ def test_bootstrap_seeds_only_currently_visible_bound_session_rows(
 
     assert bootstrap_disclosure_ledger(stock_database.path, "primary") == status
     assert verify_disclosure_ledger(stock_database.path, "primary") == status
+
+
+def test_bootstrap_reports_a_bounded_ambiguous_row_lower_bound(
+    stock_database: StockGooseDatabase,
+) -> None:
+    for ordinal in range(3):
+        stock_database.add_message(
+            "primary",
+            message_id=f"hidden-{ordinal}",
+            role="user",
+            content=[],
+            created_timestamp=ordinal,
+            metadata=user_only_metadata(),
+        )
+
+    status = bootstrap_disclosure_ledger(
+        stock_database.path,
+        "primary",
+        limits=LedgerLimits(max_entries=2),
+    )
+
+    assert status.ambiguous_rows_at_bootstrap == 3
+    assert status.ambiguous_rows_at_bootstrap_is_lower_bound is True
+    assert status.coverage_complete is False
+    assert status.coverage_reason == "preexisting-ambiguous-rows"
+    assert status.capture_enabled is True
 
 
 def test_persistent_triggers_capture_stock_insert_update_and_archive(
@@ -258,9 +324,7 @@ def test_visible_content_updates_refresh_the_same_physical_ledger_entry(
         connection.execute(
             "UPDATE messages SET content_json = ? WHERE id = ?",
             (
-                canonical_json(
-                    [{"type": "text", "text": "AFTER", "_meta": {"private": True}}]
-                ),
+                canonical_json([{"type": "text", "text": "AFTER", "_meta": {"private": True}}]),
                 row_id,
             ),
         )
@@ -277,7 +341,7 @@ def test_visible_content_updates_refresh_the_same_physical_ledger_entry(
     assert after.stored_bytes > before.stored_bytes
 
 
-def test_runtime_entry_quota_rolls_back_the_goose_insert(
+def test_runtime_entry_quota_degrades_capture_without_blocking_goose(
     stock_database: StockGooseDatabase,
 ) -> None:
     limits = LedgerLimits(max_entries=1)
@@ -291,23 +355,29 @@ def test_runtime_entry_quota_rolls_back_the_goose_insert(
         metadata=visible_metadata(),
     )
 
-    with pytest.raises(sqlite3.IntegrityError, match="sandboxed_goose_ledger_overflow"):
-        stock_database.add_message(
-            "primary",
-            message_id="second",
-            role="user",
-            content=[{"type": "text", "text": "SECOND"}],
-            created_timestamp=2,
-            metadata=visible_metadata(),
-        )
+    stock_database.add_message(
+        "primary",
+        message_id="second",
+        role="user",
+        content=[{"type": "text", "text": "SECOND"}],
+        created_timestamp=2,
+        metadata=visible_metadata(),
+    )
 
-    assert [row.message_id for row in stock_database.rows("primary")] == ["first"]
+    assert [row.message_id for row in stock_database.rows("primary")] == ["first", "second"]
+    degraded = verify_disclosure_ledger(stock_database.path, "primary")
+    assert degraded.capture_enabled is False
+    assert degraded.coverage_complete is False
+    assert degraded.coverage_reason == "capture-overflow"
+    assert degraded.coverage_epoch == 2
+    assert degraded.ledger_entries == 1
     stock_database.archive_message("primary", "first")
-    assert verify_disclosure_ledger(stock_database.path, "primary").ledger_entries == 1
-    assert _ledger_rows(stock_database, "primary")[0]["capture_reason"] == "pre-archive"
+    assert stock_database.rows("primary")[0].metadata["agentVisible"] is False
+    assert verify_disclosure_ledger(stock_database.path, "primary") == degraded
+    assert _ledger_rows(stock_database, "primary")[0]["capture_reason"] == "visible-insert"
 
 
-def test_runtime_byte_quota_rolls_back_a_visible_content_update(
+def test_runtime_byte_quota_degrades_capture_without_blocking_visible_update(
     stock_database: StockGooseDatabase,
 ) -> None:
     limits = LedgerLimits(max_stored_bytes=128, max_content_bytes=128)
@@ -325,20 +395,22 @@ def test_runtime_byte_quota_rolls_back_a_visible_content_update(
     connection = stock_database.connect()
     try:
         connection.execute("BEGIN IMMEDIATE")
-        with pytest.raises(sqlite3.IntegrityError, match="sandboxed_goose_ledger_overflow"):
-            connection.execute(
-                "UPDATE messages SET content_json = ? WHERE id = ?",
-                (canonical_json([{"type": "text", "text": "x" * 90}]), row_id),
-            )
-        connection.rollback()
+        connection.execute(
+            "UPDATE messages SET content_json = ? WHERE id = ?",
+            (canonical_json([{"type": "text", "text": "x" * 90}]), row_id),
+        )
+        connection.commit()
     finally:
         connection.close()
 
     source = stock_database.rows("primary")[0]
     ledger = _ledger_rows(stock_database, "primary")[0]
-    assert source.content == [{"type": "text", "text": "small"}]
-    assert json.loads(ledger["content_json"]) == source.content
-    assert verify_disclosure_ledger(stock_database.path, "primary") == before
+    assert source.content == [{"type": "text", "text": "x" * 90}]
+    assert json.loads(ledger["content_json"]) == [{"type": "text", "text": "small"}]
+    degraded = verify_disclosure_ledger(stock_database.path, "primary")
+    assert degraded.capture_enabled is False
+    assert degraded.coverage_reason == "capture-overflow"
+    assert degraded.coverage_epoch == before.coverage_epoch + 1
 
 
 def test_oversized_content_creates_a_bounded_omission_record(
@@ -364,7 +436,36 @@ def test_oversized_content_creates_a_bounded_omission_record(
     assert status.stored_bytes <= limits.max_stored_bytes
 
 
-def test_bootstrap_overflow_rolls_back_the_entire_schema_install(
+def test_invalid_created_timestamp_is_not_copied_into_the_ledger(
+    stock_database: StockGooseDatabase,
+) -> None:
+    bootstrap_disclosure_ledger(stock_database.path, "primary")
+    oversized_timestamp = "9" * (2 * 1024 * 1024)
+    connection = stock_database.connect()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            """
+            INSERT INTO messages
+                (message_id, session_id, role, content_json,
+                 created_timestamp, metadata_json)
+            VALUES ('bad-time', 'primary', 'user', '[]', ?, ?)
+            """,
+            (oversized_timestamp, canonical_json(visible_metadata())),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    ledger = _ledger_rows(stock_database, "primary")[0]
+    status = verify_disclosure_ledger(stock_database.path, "primary")
+    assert ledger["created_timestamp"] is None
+    assert ledger["omission_flags"] & OMITTED_CREATED_TIMESTAMP
+    assert status.omitted_entries == 1
+    assert status.stored_bytes < 1024
+
+
+def test_bootstrap_overflow_commits_a_bounded_degraded_ledger(
     stock_database: StockGooseDatabase,
 ) -> None:
     for ordinal in range(2):
@@ -377,12 +478,11 @@ def test_bootstrap_overflow_rolls_back_the_entire_schema_install(
             metadata=visible_metadata(),
         )
 
-    with pytest.raises(DisclosureLedgerOverflow):
-        bootstrap_disclosure_ledger(
-            stock_database.path,
-            "primary",
-            limits=LedgerLimits(max_entries=1),
-        )
+    status = bootstrap_disclosure_ledger(
+        stock_database.path,
+        "primary",
+        limits=LedgerLimits(max_entries=1),
+    )
 
     connection = stock_database.connect()
     try:
@@ -391,14 +491,12 @@ def test_bootstrap_overflow_rolls_back_the_entire_schema_install(
         ).fetchall()
     finally:
         connection.close()
-    assert objects == []
-
-    status = bootstrap_disclosure_ledger(
-        stock_database.path,
-        "primary",
-        limits=LedgerLimits(max_entries=2),
-    )
-    assert status.ledger_entries == 2
+    assert objects
+    assert status.capture_enabled is False
+    assert status.coverage_complete is False
+    assert status.coverage_reason == "capture-overflow"
+    assert status.coverage_epoch == 2
+    assert status.ledger_entries == 1
 
 
 def test_message_deletion_advances_and_transactionally_rolls_back_coverage_epoch(
@@ -426,10 +524,13 @@ def test_message_deletion_advances_and_transactionally_rolls_back_coverage_epoch
     try:
         connection.execute("BEGIN IMMEDIATE")
         connection.execute("DELETE FROM messages WHERE id = ?", (first_id,))
-        assert connection.execute(
-            "SELECT coverage_epoch FROM sandboxed_goose_disclosure_managed_sessions "
-            "WHERE session_id = 'primary'"
-        ).fetchone()[0] == 2
+        assert (
+            connection.execute(
+                "SELECT coverage_epoch FROM sandboxed_goose_disclosure_managed_sessions "
+                "WHERE session_id = 'primary'"
+            ).fetchone()[0]
+            == 2
+        )
         connection.rollback()
     finally:
         connection.close()
@@ -488,9 +589,7 @@ def test_stock_session_deletion_is_not_blocked_and_reuse_remains_fail_closed(
 
     connection = stock_database.connect()
     try:
-        connection.execute(
-            "INSERT INTO sessions (id, name) VALUES ('primary', 'replacement')"
-        )
+        connection.execute("INSERT INTO sessions (id, name) VALUES ('primary', 'replacement')")
         connection.commit()
     finally:
         connection.close()
@@ -547,7 +646,7 @@ def test_verification_rejects_missing_objects_and_accounting_tampering(
         verify_disclosure_ledger(altered.path, "primary")
 
 
-def test_missing_accounting_aborts_archival_before_stock_visibility_changes(
+def test_missing_accounting_degrades_capture_without_blocking_archival(
     stock_database: StockGooseDatabase,
 ) -> None:
     bootstrap_disclosure_ledger(stock_database.path, "primary")
@@ -561,19 +660,30 @@ def test_missing_accounting_aborts_archival_before_stock_visibility_changes(
     )
     connection = stock_database.connect()
     try:
-        connection.execute(
-            f"DELETE FROM {ACCOUNTING_TABLE} WHERE session_id = 'primary'"
-        )
+        connection.execute(f"DELETE FROM {ACCOUNTING_TABLE} WHERE session_id = 'primary'")
         connection.commit()
     finally:
         connection.close()
 
-    with pytest.raises(sqlite3.IntegrityError, match="sandboxed_goose_ledger_unavailable"):
-        stock_database.archive_message("primary", "must-remain-visible")
+    stock_database.archive_message("primary", "must-remain-visible")
 
     source = stock_database.rows("primary")[0]
-    assert source.metadata["agentVisible"] is True
+    assert source.metadata["agentVisible"] is False
     assert source.content == [{"type": "text", "text": "LAST_DISCLOSED_FORM"}]
+    connection = stock_database.connect()
+    try:
+        managed = connection.execute(
+            """
+            SELECT coverage_epoch, coverage_complete, coverage_reason
+            FROM sandboxed_goose_disclosure_managed_sessions
+            WHERE session_id = 'primary'
+            """
+        ).fetchone()
+    finally:
+        connection.close()
+    assert tuple(managed) == (2, 0, "capture-unavailable")
+    with pytest.raises(DisclosureLedgerUnavailable, match="bound Goose session"):
+        verify_disclosure_ledger(stock_database.path, "primary")
 
 
 def test_existing_session_limits_cannot_be_silently_reconfigured(
@@ -593,7 +703,7 @@ def test_existing_session_limits_cannot_be_silently_reconfigured(
         )
 
 
-def test_ledger_entries_are_append_only(
+def test_ledger_entries_cannot_be_deleted(
     stock_database: StockGooseDatabase,
 ) -> None:
     bootstrap_disclosure_ledger(stock_database.path, "primary")
@@ -608,7 +718,10 @@ def test_ledger_entries_are_append_only(
 
     connection = stock_database.connect()
     try:
-        with pytest.raises(sqlite3.IntegrityError, match="sandboxed_goose_ledger_append_only"):
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="sandboxed_goose_ledger_entry_delete_forbidden",
+        ):
             connection.execute(f"DELETE FROM {ENTRY_TABLE} WHERE session_id = 'primary'")
         connection.rollback()
     finally:

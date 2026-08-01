@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 import sandboxed_goose.live_test as live_test
+from sandboxed_goose.contextfs.disclosure_ledger import bootstrap_disclosure_ledger
 from sandboxed_goose.contextfs.goose_session import (
     MESSAGE_PATH_PREFIX,
     project_goose_session,
@@ -133,7 +134,7 @@ def _database(tmp_path: Path) -> Path:
         CREATE TABLE messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             message_id TEXT,
-            session_id TEXT NOT NULL,
+            session_id TEXT NOT NULL REFERENCES sessions(id),
             role TEXT NOT NULL,
             content_json TEXT NOT NULL,
             created_timestamp INTEGER NOT NULL,
@@ -143,6 +144,7 @@ def _database(tmp_path: Path) -> Path:
         """
     )
     connection.close()
+    bootstrap_disclosure_ledger(database, "primary")
     return database
 
 
@@ -415,7 +417,7 @@ def test_audit_oracle_requires_projection_only_metadata_and_accumulation(tmp_pat
     assert report["source_message_rows"] == 8
 
 
-def test_audit_target_path_survives_compaction_ordinal_and_visibility_changes(
+def test_audit_target_rejects_unsupported_historical_visibility_metadata(
     tmp_path: Path,
 ) -> None:
     database = _database(tmp_path)
@@ -429,7 +431,7 @@ def test_audit_target_path_survives_compaction_ordinal_and_visibility_changes(
     )
     before = project_goose_session(database, "primary")
     target = select_audit_target(database, "primary", "SGCTX_COMPACTION_TARGET")
-    assert target.ordinal == 2
+    assert target.source_row_id == 2
 
     connection = sqlite3.connect(database)
     connection.execute(
@@ -456,63 +458,9 @@ def test_audit_target_path_survives_compaction_ordinal_and_visibility_changes(
     connection.commit()
     connection.close()
 
-    shifted_target = select_audit_target(database, "primary", "SGCTX_COMPACTION_TARGET")
-    assert shifted_target.path == target.path
-    assert shifted_target.ordinal == 3
-    assert shifted_target.context_visibility == "historical"
-
-    marker = "SGCTX_AUDIT_TEST_001_compacted"
-    prompt = _audit_prompt(1, marker, target)
-    selected = audit_expected_result(target, marker, 1)
-    observed = audit_expected_result(shifted_target, marker, 1)
-    target_content = (
-        json.dumps(shifted_target.payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    )
-    listing = {
-        "path": f"/context/{MESSAGE_PATH_PREFIX}",
-        "type": "directory",
-        "read_only": True,
-        "entries": [{"name": Path(target.path).name, "type": "file"}],
-    }
-    _insert(
-        database,
-        [
-            ("user", [{"type": "text", "text": prompt}]),
-            ("assistant", [_request("list-messages", {"path": MESSAGE_PATH_PREFIX})]),
-            ("user", [_response("list-messages", listing)]),
-            (
-                "assistant",
-                [_request("read-target", {"path": target.path, "offset": 0, "limit": 65536})],
-            ),
-            (
-                "user",
-                [
-                    _response(
-                        "read-target",
-                        _file_envelope(
-                            target.path, len(target_content.encode()), 0, target_content
-                        ),
-                    )
-                ],
-            ),
-            ("assistant", [{"type": "text", "text": _audit_expected_line(observed)}]),
-        ],
-    )
-
-    report = verify_audit_turn(
-        database,
-        "primary",
-        after_row_id=2,
-        prompt=prompt,
-        marker=marker,
-        expected_result=selected,
-        target=target,
-        tool_name=TOOL_NAME,
-        decoy_marker="DECOY_MUST_NOT_APPEAR",
-        previous_snapshot_id=before.snapshot_id,
-        previous_source_rows=2,
-    )
-
-    assert report["target"] == observed
-    assert report["selected_target"] == selected
-    assert report["target_snapshot_fields_changed"] is True
+    after = project_goose_session(database, "primary")
+    assert after.snapshot_id != before.snapshot_id
+    summary_path = f"{MESSAGE_PATH_PREFIX}/{3:020d}.json"
+    assert prior_marker.encode() not in after.files[summary_path]
+    with pytest.raises(LiveTestError, match="expected exactly one projected message"):
+        select_audit_target(database, "primary", "SGCTX_COMPACTION_TARGET")

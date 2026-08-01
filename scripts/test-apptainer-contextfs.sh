@@ -255,22 +255,22 @@ run_apptainer --config "$runtime_config" \
     /bin/bash --noprofile --norc -c '
         set -eu
 
-        test "$(jq -r .projection /context/manifest.json)" = goose-session-disclosed-history
+        test "$(jq -r .projection /context/manifest.json)" = goose-session-eligible-context
         test "$(jq -r .session_id /context/manifest.json)" = current-session
         test "$(jq -r .source_message_rows /context/manifest.json)" = 7
         test "$(jq -r .current_agent_visible_rows /context/manifest.json)" = 5
-        test "$(jq -r .historical_agent_visible_rows /context/manifest.json)" = 1
-        test "$(jq -r .omitted_unprojected_rows /context/manifest.json)" = 1
+        test "$(jq -r .historical_agent_visible_rows /context/manifest.json)" = 0
+        test "$(jq -r .omitted_unprojected_rows /context/manifest.json)" = 2
         test "$(jq -r .limits.max_events /context/manifest.json)" = 700
-        test "$(find /context/session/messages -type f | wc -l)" = 6
+        test "$(find /context/session/messages -type f | wc -l)" = 5
 
-        grep -q PRECOMPACTION_HISTORY_MARKER /context/session/transcript.md
         grep -q VISIBLE_SESSION_MARKER /context/session/transcript.md
         grep -q VISIBLE_TOOL_RESULT /context/session/transcript.md
         grep -q COMPACTION_SUMMARY_MARKER /context/session/transcript.md
         grep -Rq '"name": "calculate"' /context/session/events
 
         for secret in \
+            PRECOMPACTION_HISTORY_MARKER \
             ANNOTATED_USER_ONLY_SECRET \
             INTERNAL_META_SECRET \
             STRUCTURED_SECRET \

@@ -64,11 +64,15 @@ def _coverage(
     *,
     schema_version: int = 1,
     fingerprint: str = "b" * 64,
+    database_identity: str = "c" * 64,
+    session_incarnation: str = "d" * 64,
 ) -> LedgerCoverageIdentity:
     return LedgerCoverageIdentity(
         schema_version=schema_version,
         schema_fingerprint=fingerprint,
         coverage_epoch=epoch,
+        database_identity=database_identity,
+        session_incarnation=session_incarnation,
     )
 
 
@@ -162,11 +166,15 @@ def test_operation_request_validation_is_strict_and_bounded() -> None:
 
 def test_result_container_and_ledger_identity_validation_is_strict() -> None:
     with pytest.raises(ValueError, match="schema_fingerprint"):
-        LedgerCoverageIdentity(1, "not-a-digest", 1)
+        LedgerCoverageIdentity(1, "not-a-digest", 1, "c" * 64, "d" * 64)
     with pytest.raises(ValueError, match="positive"):
-        LedgerCoverageIdentity(0, "b" * 64, 1)
+        LedgerCoverageIdentity(0, "b" * 64, 1, "c" * 64, "d" * 64)
     with pytest.raises(ValueError, match="positive"):
-        LedgerCoverageIdentity(1, "b" * 64, 0)
+        LedgerCoverageIdentity(1, "b" * 64, 0, "c" * 64, "d" * 64)
+    with pytest.raises(ValueError, match="database_identity"):
+        LedgerCoverageIdentity(1, "b" * 64, 1, "not-a-digest", "d" * 64)
+    with pytest.raises(ValueError, match="session_incarnation"):
+        LedgerCoverageIdentity(1, "b" * 64, 1, "c" * 64, "not-a-digest")
     with pytest.raises(TypeError, match="must be bytes"):
         MaterializedViewFile("file", bytearray(b"mutable"))  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="LedgerCoverageIdentity"):
@@ -407,15 +415,12 @@ def test_result_limits_fail_before_material_enters_the_store() -> None:
 def test_unknown_and_malformed_tokens_have_the_same_bounded_failure() -> None:
     store = SessionViewStore()
     messages = []
-    for token in ("attacker-controlled-secret", "f" * 64):
+    for token in ("attacker-controlled-secret", "f" * 64, "f" * 1_000_000):
         with pytest.raises(ViewExpiredError) as caught:
             store.get(token, _request(), current_ledger_coverage=_coverage())
         messages.append(str(caught.value))
 
-    assert messages == [
-        "session view is unavailable; start a new operation",
-        "session view is unavailable; start a new operation",
-    ]
+    assert messages == ["session view is unavailable; start a new operation"] * 3
     assert all("attacker" not in message for message in messages)
 
 
