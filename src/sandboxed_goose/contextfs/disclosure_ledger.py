@@ -9,6 +9,8 @@ infers that an already invisible row was previously eligible.
 from __future__ import annotations
 
 import hashlib
+import re
+import secrets
 import sqlite3
 import stat
 from collections.abc import Iterator
@@ -16,6 +18,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
+
+from sandboxed_goose.contextfs.eligibility import agent_visible_sql
+from sandboxed_goose.contextfs.goose_session import CURRENT_MESSAGE_SQL
 
 LEDGER_SCHEMA_VERSION: Final = 2
 
@@ -52,10 +57,6 @@ class DisclosureLedgerError(RuntimeError):
 
 class DisclosureLedgerUnavailable(DisclosureLedgerError):
     """The database, schema, session, or accounting state is unavailable."""
-
-
-class DisclosureLedgerOverflow(DisclosureLedgerError):
-    """A configured ledger row or byte quota would be exceeded."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,13 +118,7 @@ def _byte_length(row: str, column: str) -> str:
 
 
 def _visible(row: str) -> str:
-    return (
-        f"CASE WHEN typeof({row}.metadata_json) = 'text' "
-        f"AND {_byte_length(row, 'metadata_json')} <= {HARD_MAX_METADATA_BYTES} "
-        f"THEN CASE WHEN json_valid({row}.metadata_json) "
-        f"THEN COALESCE(json_extract({row}.metadata_json, '$.agentVisible'), 0) "
-        "ELSE 0 END ELSE 0 END = 1"
-    )
+    return agent_visible_sql(row, max_metadata_bytes=HARD_MAX_METADATA_BYTES)
 
 
 def _omission_flags(row: str, managed: str) -> str:
@@ -251,7 +246,8 @@ _TABLE_DEFINITIONS: Final[dict[str, str]] = {
         CREATE TABLE {META_TABLE} (
             singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
             schema_version INTEGER NOT NULL CHECK (schema_version = {LEDGER_SCHEMA_VERSION}),
-            schema_fingerprint TEXT NOT NULL CHECK (length(schema_fingerprint) = 64)
+            schema_fingerprint TEXT NOT NULL CHECK (length(schema_fingerprint) = 64),
+            database_nonce TEXT NOT NULL CHECK (length(database_nonce) = 64)
         )
     """,
     MANAGED_TABLE: f"""
@@ -320,6 +316,18 @@ _TABLE_DEFINITIONS: Final[dict[str, str]] = {
             omitted_entries INTEGER NOT NULL DEFAULT 0 CHECK (omitted_entries >= 0),
             FOREIGN KEY (session_id) REFERENCES {MANAGED_TABLE}(session_id)
         )
+    """,
+}
+
+_INDEX_DEFINITIONS: Final[dict[str, str]] = {
+    "sandboxed_goose_disclosure_messages_by_session": """
+        CREATE INDEX sandboxed_goose_disclosure_messages_by_session
+        ON messages(session_id, id)
+    """,
+    "sandboxed_goose_disclosure_current_messages": f"""
+        CREATE INDEX sandboxed_goose_disclosure_current_messages
+        ON messages(session_id, created_timestamp DESC, id DESC)
+        WHERE {CURRENT_MESSAGE_SQL}
     """,
 }
 
@@ -561,6 +569,7 @@ _TRIGGER_DEFINITIONS: Final[dict[str, str]] = {
 
 _OBJECT_DEFINITIONS: Final[dict[str, tuple[str, str]]] = {
     **{name: ("table", sql) for name, sql in _TABLE_DEFINITIONS.items()},
+    **{name: ("index", sql) for name, sql in _INDEX_DEFINITIONS.items()},
     **{name: ("trigger", sql) for name, sql in _TRIGGER_DEFINITIONS.items()},
 }
 SCHEMA_FINGERPRINT: Final = hashlib.sha256(
@@ -581,7 +590,7 @@ def bootstrap_disclosure_ledger(
 
     active_limits = limits if limits is not None else LedgerLimits()
     resolved = _resolve_database(database)
-    database_identity = _database_identity(resolved)
+    database_file_identity = _database_file_identity(resolved)
     _validate_session_id(session_id)
     connection: sqlite3.Connection | None = None
     installed = False
@@ -591,7 +600,7 @@ def bootstrap_disclosure_ledger(
         connection.execute("PRAGMA busy_timeout = 2000")
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("BEGIN IMMEDIATE")
-        _require_database_identity(resolved, database_identity)
+        _require_database_file_identity(resolved, database_file_identity)
         _validate_stock_schema(connection)
         owned = _read_owned_objects(connection)
         if not owned:
@@ -611,7 +620,7 @@ def bootstrap_disclosure_ledger(
         status = _read_status(
             connection,
             resolved,
-            database_identity,
+            database_file_identity,
             session_id,
         )
         connection.commit()
@@ -623,10 +632,6 @@ def bootstrap_disclosure_ledger(
     except (OSError, sqlite3.Error) as error:
         if connection is not None:
             connection.rollback()
-        if "sandboxed_goose_ledger_overflow" in str(error):
-            raise DisclosureLedgerOverflow(
-                "disclosure ledger quota cannot cover the managed session"
-            ) from error
         action = "install" if installed else "verify"
         raise DisclosureLedgerUnavailable(f"cannot {action} disclosure ledger: {error}") from error
     finally:
@@ -653,7 +658,7 @@ def open_verified_disclosure_snapshot(
     """
 
     resolved = _resolve_database(database)
-    database_identity = _database_identity(resolved)
+    database_file_identity = _database_file_identity(resolved)
     _validate_session_id(session_id)
     connection: sqlite3.Connection | None = None
     try:
@@ -662,7 +667,7 @@ def open_verified_disclosure_snapshot(
         connection.execute("PRAGMA query_only = ON")
         connection.execute("PRAGMA busy_timeout = 1000")
         connection.execute("BEGIN")
-        _require_database_identity(resolved, database_identity)
+        _require_database_file_identity(resolved, database_file_identity)
         _validate_stock_schema(connection)
         _verify_schema_objects(_read_owned_objects(connection))
         _verify_meta(connection)
@@ -670,7 +675,7 @@ def open_verified_disclosure_snapshot(
         status = _read_status(
             connection,
             resolved,
-            database_identity,
+            database_file_identity,
             session_id,
         )
     except DisclosureLedgerError:
@@ -711,8 +716,8 @@ def _resolve_database(database: Path) -> Path:
     return resolved
 
 
-def _database_identity(database: Path) -> str:
-    """Return a process-comparable identity that changes on atomic DB replacement."""
+def _database_file_identity(database: Path) -> str:
+    """Return a process-comparable filesystem identity for open-time replacement checks."""
 
     try:
         details = database.stat()
@@ -726,8 +731,8 @@ def _database_identity(database: Path) -> str:
     return hashlib.sha256(basis).hexdigest()
 
 
-def _require_database_identity(database: Path, expected: str) -> None:
-    if _database_identity(database) != expected:
+def _require_database_file_identity(database: Path, expected: str) -> None:
+    if _database_file_identity(database) != expected:
         raise DisclosureLedgerUnavailable(
             "Goose session database was replaced while establishing a verified snapshot"
         )
@@ -793,7 +798,7 @@ def _read_owned_objects(connection: sqlite3.Connection) -> dict[str, tuple[str, 
     rows = connection.execute(
         """
         SELECT name, type, sql FROM sqlite_master
-        WHERE name GLOB ? AND type IN ('table', 'trigger')
+        WHERE name GLOB ? AND type IN ('table', 'index', 'trigger')
         """,
         (f"{OBJECT_PREFIX}*",),
     ).fetchall()
@@ -803,12 +808,15 @@ def _read_owned_objects(connection: sqlite3.Connection) -> dict[str, tuple[str, 
 def _create_schema(connection: sqlite3.Connection) -> None:
     for sql in _TABLE_DEFINITIONS.values():
         connection.execute(sql)
+    for sql in _INDEX_DEFINITIONS.values():
+        connection.execute(sql)
     for sql in _TRIGGER_DEFINITIONS.values():
         connection.execute(sql)
     connection.execute(
-        f"INSERT INTO {META_TABLE} (singleton, schema_version, schema_fingerprint) "
-        "VALUES (1, ?, ?)",
-        (LEDGER_SCHEMA_VERSION, SCHEMA_FINGERPRINT),
+        f"INSERT INTO {META_TABLE} "
+        "(singleton, schema_version, schema_fingerprint, database_nonce) "
+        "VALUES (1, ?, ?, ?)",
+        (LEDGER_SCHEMA_VERSION, SCHEMA_FINGERPRINT, secrets.token_hex(32)),
     )
     _verify_schema_objects(_read_owned_objects(connection))
 
@@ -828,9 +836,10 @@ def _verify_schema_objects(actual: dict[str, tuple[str, str]]) -> None:
             raise DisclosureLedgerUnavailable(f"disclosure ledger object was altered: {name}")
 
 
-def _verify_meta(connection: sqlite3.Connection) -> None:
+def _verify_meta(connection: sqlite3.Connection) -> str:
     rows = connection.execute(
-        f"SELECT singleton, schema_version, schema_fingerprint FROM {META_TABLE}"
+        f"SELECT singleton, schema_version, schema_fingerprint, database_nonce "
+        f"FROM {META_TABLE}"
     ).fetchall()
     if len(rows) != 1:
         raise DisclosureLedgerUnavailable("disclosure ledger metadata is missing or duplicated")
@@ -839,8 +848,11 @@ def _verify_meta(connection: sqlite3.Connection) -> None:
         row["singleton"] != 1
         or row["schema_version"] != LEDGER_SCHEMA_VERSION
         or row["schema_fingerprint"] != SCHEMA_FINGERPRINT
+        or not isinstance(row["database_nonce"], str)
+        or re.fullmatch(r"[0-9a-f]{64}", row["database_nonce"]) is None
     ):
         raise DisclosureLedgerUnavailable("unsupported disclosure ledger metadata")
+    return str(row["database_nonce"])
 
 
 def _require_session(connection: sqlite3.Connection, session_id: str) -> None:
@@ -921,7 +933,7 @@ def _require_limits(row: sqlite3.Row, limits: LedgerLimits) -> None:
 def _read_status(
     connection: sqlite3.Connection,
     database: Path,
-    database_identity: str,
+    database_file_identity: str,
     session_id: str,
 ) -> LedgerStatus:
     row = connection.execute(
@@ -979,6 +991,10 @@ def _read_status(
         limits.max_stored_bytes
     ):
         raise DisclosureLedgerUnavailable("disclosure ledger accounting exceeds its limits")
+    database_nonce = _verify_meta(connection)
+    database_identity = hashlib.sha256(
+        f"{database_file_identity}\0{database_nonce}".encode("ascii")
+    ).hexdigest()
     return LedgerStatus(
         database=database,
         database_identity=database_identity,

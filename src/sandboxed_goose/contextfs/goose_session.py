@@ -15,8 +15,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from sandboxed_goose.contextfs.bundle import write_bundle
+from sandboxed_goose.contextfs.eligibility import agent_visible_sql
 from sandboxed_goose.contextfs.model import (
     MAX_DEPTH,
+    MAX_FILE_BYTES,
     MAX_NAME_BYTES,
     ProjectionError,
     Snapshot,
@@ -41,12 +43,7 @@ EVENT_PATH_PREFIX = "session/events/by-source-row"
 SOURCE_ROW_ID_WIDTH = 20
 
 CURRENT_MESSAGE_SQL = f"""
-    CASE WHEN typeof(metadata_json) = 'text'
-          AND length(CAST(metadata_json AS BLOB)) <= {MAX_SOURCE_METADATA_BYTES}
-         THEN CASE WHEN json_valid(metadata_json)
-                   THEN COALESCE(json_extract(metadata_json, '$.agentVisible'), 0)
-                   ELSE 0 END
-         ELSE 0 END = 1
+    {agent_visible_sql("", max_metadata_bytes=MAX_SOURCE_METADATA_BYTES)}
     AND typeof(role) = 'text'
     AND role IN ('user', 'assistant')
     AND typeof(content_json) = 'text'
@@ -91,6 +88,7 @@ class _SourceRow:
     content_json: str | None
     source_content_bytes: int
     context_visibility: str
+    content_omission_reason: str = "source-content-byte-limit"
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,11 +154,14 @@ def project_goose_session(
 
     for row in rows:
         message, malformed = _normalize_message(row)
+        estimate = len(_json_bytes(_message_payload(message, 1)))
+        if estimate > MAX_FILE_BYTES:
+            message = _normalized_content_omission(row, "normalized-content-byte-limit")
+            estimate = len(_json_bytes(_message_payload(message, 1)))
         if malformed:
             malformed_rows += 1
         audience_filtered_blocks += message.omitted.count("audience-excluded")
         content_omissions.update(message.omitted)
-        estimate = len(_json_bytes(_message_payload(message, 1)))
         if normalized_newest and normalized_budget + estimate > MAX_NORMALIZED_BYTES:
             truncated_by_bytes = True
             break
@@ -199,7 +200,17 @@ def project_goose_session(
                 "created": message.source.created,
                 "content": content,
             }
-            payloads[_event_path(message.source.row_id, content_index)] = _json_bytes(event_payload)
+            event_bytes = _json_bytes(event_payload)
+            if len(event_bytes) > MAX_FILE_BYTES:
+                event_payload["content"] = {
+                    "type": "omitted",
+                    "originalType": "message-content",
+                    "reason": "normalized-content-byte-limit",
+                    "sourceBytes": message.source.source_content_bytes,
+                }
+                event_bytes = _json_bytes(event_payload)
+                content_omissions.update(("normalized-content-byte-limit",))
+            payloads[_event_path(message.source.row_id, content_index)] = event_bytes
 
     transcript = "# Goose session eligible context\n\n" + "\n\n".join(transcript_sections)
     transcript = _truncate_text(
@@ -355,6 +366,19 @@ def render_projection_path(
     )
 
 
+def decode_sqlite_utf8_blob(value: object, field: str) -> tuple[str | None, bool]:
+    """Decode a bounded ``CAST(... AS BLOB)`` result without sqlite3 text decoding."""
+
+    if value is None:
+        return None, True
+    if not isinstance(value, bytes):
+        raise ProjectionError(f"{field} has an invalid SQLite shape")
+    try:
+        return value.decode("utf-8"), True
+    except UnicodeDecodeError:
+        return None, False
+
+
 def _read_session_rows(
     database: Path,
     session_id: str,
@@ -399,16 +423,15 @@ def _read_session_rows(
                    CASE
                        WHEN typeof(message_id) = 'text'
                         AND length(CAST(message_id AS BLOB)) <= ?
-                       THEN message_id ELSE NULL
-                   END AS bounded_message_id,
-                   role,
+                       THEN CAST(message_id AS BLOB) ELSE NULL
+                   END AS bounded_message_id_blob,
+                   CAST(role AS BLOB) AS role_blob,
                    created_timestamp,
                    CASE
                        WHEN length(CAST(content_json AS BLOB)) <= ?
-                       THEN content_json ELSE NULL
-                   END AS bounded_content_json,
-                   length(CAST(content_json AS BLOB)) AS source_content_bytes,
-                   json_extract(metadata_json, '$.agentVisible') AS agent_visible
+                       THEN CAST(content_json AS BLOB) ELSE NULL
+                   END AS bounded_content_blob,
+                   length(CAST(content_json AS BLOB)) AS source_content_bytes
             FROM messages
             WHERE session_id = ? AND {PROJECTABLE_MESSAGE_SQL}
             ORDER BY created_timestamp DESC, id DESC
@@ -450,13 +473,19 @@ def _read_session_rows(
 
     rows: list[_SourceRow] = []
     for row in selected:
-        content_json = row["bounded_content_json"]
-        role = row["role"]
-        if content_json is not None and not isinstance(content_json, str):
-            raise ProjectionError("Goose message content has an invalid shape")
-        if not isinstance(role, str):
+        content_json, content_is_utf8 = decode_sqlite_utf8_blob(
+            row["bounded_content_blob"], "Goose message content"
+        )
+        role, role_is_utf8 = decode_sqlite_utf8_blob(
+            row["role_blob"], "Goose message role"
+        )
+        if role is None or not role_is_utf8:
             raise ProjectionError("Goose message row has an invalid shape")
-        message_id = row["bounded_message_id"]
+        message_id, message_id_is_utf8 = decode_sqlite_utf8_blob(
+            row["bounded_message_id_blob"], "Goose message ID"
+        )
+        if not message_id_is_utf8:
+            message_id = None
         source_content_bytes = row["source_content_bytes"]
         if isinstance(source_content_bytes, bool) or not isinstance(source_content_bytes, int):
             raise ProjectionError("Goose message content length has an invalid shape")
@@ -469,6 +498,11 @@ def _read_session_rows(
                 content_json=content_json,
                 source_content_bytes=source_content_bytes,
                 context_visibility="current",
+                content_omission_reason=(
+                    "invalid-content-encoding"
+                    if not content_is_utf8
+                    else "source-content-byte-limit"
+                ),
             )
         )
     lower_bounds = tuple(
@@ -513,11 +547,11 @@ def _normalize_message(row: _SourceRow) -> tuple[_NormalizedMessage, bool]:
                     {
                         "type": "omitted",
                         "originalType": "message-content",
-                        "reason": "source-content-byte-limit",
+                        "reason": row.content_omission_reason,
                         "sourceBytes": row.source_content_bytes,
                     },
                 ),
-                omitted=("source-content-byte-limit",),
+                omitted=(row.content_omission_reason,),
             ),
             False,
         )
@@ -575,6 +609,21 @@ def _normalize_message(row: _SourceRow) -> tuple[_NormalizedMessage, bool]:
         )
         omitted.append("content-item-limit")
     return _NormalizedMessage(row, tuple(content), tuple(omitted)), False
+
+
+def _normalized_content_omission(row: _SourceRow, reason: str) -> _NormalizedMessage:
+    return _NormalizedMessage(
+        source=row,
+        content=(
+            {
+                "type": "omitted",
+                "originalType": "message-content",
+                "reason": reason,
+                "sourceBytes": row.source_content_bytes,
+            },
+        ),
+        omitted=(reason,),
+    )
 
 
 def _normalize_content_block(
@@ -807,7 +856,9 @@ def render_stable_message_artifact(
     ):
         raise ProjectionError("source_content_bytes must be a non-negative integer")
     if content_omission_reason not in {
+        "invalid-content-encoding",
         "ledger-content-unavailable",
+        "normalized-content-byte-limit",
         "source-content-byte-limit",
     }:
         raise ProjectionError("unsupported content omission reason")

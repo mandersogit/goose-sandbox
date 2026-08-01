@@ -43,7 +43,6 @@ class SessionOperation(StrEnum):
     """One projection operation to which a view token can be bound."""
 
     RECENT_TREE = "recent-tree"
-    DIRECTORY_PAGE = "directory-page"
     EXACT_OBJECT = "exact-object"
     TRANSCRIPT = "transcript"
     MANIFEST = "manifest"

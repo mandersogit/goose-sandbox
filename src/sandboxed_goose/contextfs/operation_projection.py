@@ -32,6 +32,7 @@ from sandboxed_goose.contextfs.goose_session import (
     MESSAGE_PATH_PREFIX,
     SOURCE_ROW_ID_WIDTH,
     StableMessageArtifact,
+    decode_sqlite_utf8_blob,
     render_stable_message_artifact,
 )
 from sandboxed_goose.contextfs.model import ProjectionError
@@ -73,8 +74,10 @@ class _PreflightRow:
 class _LoadedRow:
     preflight: _PreflightRow
     message_id: str | None
+    message_id_is_utf8: bool
     role: str
     content_json: str | None
+    content_is_utf8: bool
 
 
 def query_session_operation_descriptors(
@@ -322,7 +325,10 @@ def _preflight_recent_descriptors(
     for row in newest:
         next_retained_bytes = retained_bytes + row.retained_content_bytes
         next_identity_bytes = identity_bytes + (
-            row.message_id_bytes if row.message_id_is_text else 0
+            row.message_id_bytes
+            if row.message_id_is_text
+            and row.message_id_bytes <= ledger_status.limits.max_message_id_bytes
+            else 0
         )
         if bounded_newest and (
             next_retained_bytes > MAX_OPERATION_SOURCE_CONTENT_BYTES
@@ -512,6 +518,14 @@ def _load_descriptor_rows(
         loaded = _load_one_descriptor(connection, session_id, ledger_status, expected)
         artifact, message_id_status = _normalize_loaded_descriptor(loaded, ledger_status)
         if len(artifact.file_bytes) > MAX_VIEW_FILE_BYTES:
+            artifact, fallback_status = _normalize_loaded_descriptor(
+                loaded,
+                ledger_status,
+                force_content_omission_reason="normalized-content-byte-limit",
+            )
+            if fallback_status != message_id_status:  # pragma: no cover - local invariant
+                raise AssertionError("content omission changed message identity status")
+        if len(artifact.file_bytes) > MAX_VIEW_FILE_BYTES:
             raise ViewTooLargeError(f"stable message file exceeds {MAX_VIEW_FILE_BYTES} bytes")
         physical_path = (
             f"{MESSAGE_PATH_PREFIX}/{expected.source_row_id:0{SOURCE_ROW_ID_WIDTH}d}.json"
@@ -566,10 +580,12 @@ def _load_one_descriptor(
                    0 AS omission_flags,
                    CASE WHEN typeof(message_id) = 'text'
                           AND length(CAST(message_id AS BLOB)) <= ?
-                        THEN message_id ELSE NULL END AS bounded_message_id,
-                   role,
+                        THEN CAST(message_id AS BLOB) ELSE NULL END
+                        AS bounded_message_id_blob,
+                   CAST(role AS BLOB) AS role_blob,
                    CASE WHEN length(CAST(content_json AS BLOB)) <= ?
-                        THEN content_json ELSE NULL END AS bounded_content_json
+                        THEN CAST(content_json AS BLOB) ELSE NULL END
+                        AS bounded_content_blob
             FROM messages
             WHERE session_id = ? AND id = ? AND {CURRENT_MESSAGE_SQL}
             LIMIT 1
@@ -597,11 +613,13 @@ def _load_one_descriptor(
                    CASE WHEN typeof(message_id) = 'text'
                           AND source_message_id_bytes <= ?
                           AND (omission_flags & {OMITTED_MESSAGE_ID}) = 0
-                        THEN message_id ELSE NULL END AS bounded_message_id,
-                   role,
+                        THEN CAST(message_id AS BLOB) ELSE NULL END
+                        AS bounded_message_id_blob,
+                   CAST(role AS BLOB) AS role_blob,
                    CASE WHEN typeof(content_json) = 'text'
                           AND length(CAST(content_json AS BLOB)) <= ?
-                        THEN content_json ELSE NULL END AS bounded_content_json
+                        THEN CAST(content_json AS BLOB) ELSE NULL END
+                        AS bounded_content_blob
             FROM {ENTRY_TABLE} AS entry
             WHERE entry.session_id = ?
               AND entry.coverage_epoch = ?
@@ -622,43 +640,62 @@ def _load_one_descriptor(
     observed = _preflight_from_row(row, expected.origin)
     if observed != expected:
         raise ProjectionError("operation descriptor row changed within one snapshot")
-    message_id = row["bounded_message_id"]
-    role = row["role"]
-    content_json = row["bounded_content_json"]
-    if message_id is not None and not isinstance(message_id, str):
-        raise ProjectionError("Goose message ID has an invalid SQLite type")
-    if not isinstance(role, str):
+    message_id, message_id_is_utf8 = decode_sqlite_utf8_blob(
+        row["bounded_message_id_blob"], "Goose message ID"
+    )
+    role, role_is_utf8 = decode_sqlite_utf8_blob(row["role_blob"], "Goose message role")
+    content_json, content_is_utf8 = decode_sqlite_utf8_blob(
+        row["bounded_content_blob"], "Goose message content"
+    )
+    if role is None or not role_is_utf8:
         raise ProjectionError("Goose message role has an invalid SQLite type")
-    if content_json is not None and not isinstance(content_json, str):
-        raise ProjectionError("Goose message content has an invalid SQLite type")
     return _LoadedRow(
         preflight=expected,
         message_id=message_id,
+        message_id_is_utf8=message_id_is_utf8,
         role=role,
         content_json=content_json,
+        content_is_utf8=content_is_utf8,
     )
 
 
 def _normalize_loaded_descriptor(
     loaded: _LoadedRow,
     ledger_status: LedgerStatus,
+    *,
+    force_content_omission_reason: str | None = None,
 ) -> tuple[StableMessageArtifact, str]:
     row = loaded.preflight
-    if row.omission_flags & OMITTED_MESSAGE_ID:
-        message_id_status = "omitted"
-    elif row.message_id_is_null:
+    message_id_was_omitted = bool(row.omission_flags & OMITTED_MESSAGE_ID)
+    if row.message_id_is_null and not message_id_was_omitted:
         message_id_status = "missing"
-    elif not row.message_id_is_text:
-        message_id_status = "invalid"
-    elif row.message_id_bytes == 0:
+    elif row.message_id_is_text and loaded.message_id_is_utf8 and row.message_id_bytes == 0:
         message_id_status = "empty"
     elif row.message_id_bytes > ledger_status.limits.max_message_id_bytes:
         message_id_status = "oversized"
+    elif not row.message_id_is_text or not loaded.message_id_is_utf8:
+        message_id_status = "invalid"
+    elif message_id_was_omitted:
+        message_id_status = "omitted"
     elif loaded.message_id is not None:
         message_id_status = "available"
     else:
         raise ProjectionError("bounded message ID state is inconsistent")
     message_id = loaded.message_id if message_id_status in {"available", "empty"} else None
+    if force_content_omission_reason is not None:
+        content_json = None
+        content_omission_reason = force_content_omission_reason
+    elif not loaded.content_is_utf8:
+        content_json = None
+        content_omission_reason = "invalid-content-encoding"
+    else:
+        content_json = loaded.content_json
+        content_omission_reason = (
+            "ledger-content-unavailable"
+            if row.origin == _LEDGER_ORIGIN
+            and row.source_content_bytes <= ledger_status.limits.max_content_bytes
+            else "source-content-byte-limit"
+        )
     artifact = render_stable_message_artifact(
         projection_schema_version=OPERATION_PROJECTION_SCHEMA_VERSION,
         source_row_id=row.source_row_id,
@@ -667,13 +704,8 @@ def _normalize_loaded_descriptor(
         role=loaded.role,
         created=row.created,
         source_content_bytes=row.source_content_bytes,
-        content_json=loaded.content_json,
-        content_omission_reason=(
-            "ledger-content-unavailable"
-            if row.origin == _LEDGER_ORIGIN
-            and row.source_content_bytes <= ledger_status.limits.max_content_bytes
-            else "source-content-byte-limit"
-        ),
+        content_json=content_json,
+        content_omission_reason=content_omission_reason,
     )
     return artifact, message_id_status
 
