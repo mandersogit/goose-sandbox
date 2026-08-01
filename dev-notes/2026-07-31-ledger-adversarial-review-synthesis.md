@@ -25,6 +25,8 @@ The breadth-first implementation described here is now present. Schema-v2 ledger
 capture degrades without aborting Goose writes, schema-v3 operation views merge current
 and valid same-epoch captured rows, every public request revalidates the exact ledger
 and database/session incarnation, and bounded process-local views pin continuations.
+The [follow-up adversarial review](2026-07-31-ledger-follow-up-adversarial-review.md)
+records the reproduced post-checkpoint defects and their fixes.
 The rest of this note preserves the review reasoning and the stop rule used to avoid
 turning the ledger into an audit or arbitrary-database-authentication system.
 
@@ -77,13 +79,13 @@ for this milestone.
 | The stock projection still accepts the experimental `historicallyAgentVisible` metadata field. A session row can therefore claim unsupported history without a same-epoch ledger entry. | **Implemented.** The supported stock predicate accepts only valid current `agentVisible` rows; historical content requires a valid same-incarnation, same-epoch capture. |
 | A module-level server can expose `session_context` without the normal startup bootstrap, and startup binding alone does not protect every request. | **Implemented.** Module-level server singletons were removed and each public operation verifies the exact ledger/session binding. |
 | Some dynamic SQLite values, notably `created_timestamp`, can be fetched or serialized without a useful type/byte bound. The legacy projector also fetches content before applying its result limit. | **Implemented.** Public operations use type-checked preflight queries, bounded values, capped counts, and bounded materialization. Invalid rows are omitted or degraded. |
-| A pinned view is bound to a session ID and ledger epoch but not sufficiently to the database/session incarnation. Replacing the database with another containing the same identifiers can preserve a stale view. | **Implemented.** Views bind to opaque database and session-incarnation digests in addition to ledger generation. |
+| A pinned view is bound to a session ID and ledger epoch but not sufficiently to the database/session incarnation. Replacing the database with another containing the same identifiers can preserve a stale view. | **Implemented.** Views bind to opaque database and session-incarnation digests in addition to ledger generation. A persisted random database nonce covers both atomic and same-inode independent-database replacement. |
 | `NULL` or malformed message metadata has different semantics in stock Goose and the projector. | **Handle conservatively.** Normal Goose serializes valid metadata. For legacy or corrupt rows, omit the row from historical projection and report degraded coverage instead of guessing. |
-| Full counts, namespace discovery, and descriptor scans can become unbounded, while byte-budget selection may skip a large row and admit older small rows. | **Implemented.** Counts and recent discovery are capped; byte selection is a contiguous newest suffix; exact physical lookup is independent of the recent window. |
+| Full counts, namespace discovery, and descriptor scans can become unbounded, while byte-budget selection may skip a large row and admit older small rows. | **Implemented.** Counts and recent discovery are capped; verified owned indexes bound normal stock-Goose current-row plans; byte selection is a contiguous newest suffix; exact physical lookup is independent of the recent window. |
 | Per-session ledger quotas accumulate across epochs and can eventually abort ordinary Goose writes. | **Implemented.** Quota/accounting failure advances the epoch, disables capture, and allows the Goose write to commit. |
 | Ledger rows can be refreshed in place and content integrity is not authenticated against a same-database writer. | **Document, do not deepen.** Stop calling the ledger append-only or tamper-proof. Strict schema, type, accounting, and cross-field validation are sufficient for the trusted-writer boundary. |
 | Session deletion leaves retained ledger content and there is no global retention policy. | **Defer full lifecycle work.** Record the limitation and add an explicit cleanup/retention facility before broad multi-user deployment; it does not block bounded parsing and projection. |
-| Row-ID mutation, unusual `INSERT OR REPLACE` conflicts, arbitrary extra SQLite objects, repeated random-token injection, and foreign-key-disabled session reuse create exotic failure modes. | **Bucket and defer.** Incarnation binding plus conservative omission covers the meaningful consequence. Do not build separate machinery for every arbitrary SQL-writer behavior. |
+| Row-ID mutation, unusual `INSERT OR REPLACE` conflicts, invisible cross-session moves, rollback to a same-nonce clone, arbitrary extra SQLite objects, repeated random-token injection, and foreign-key-disabled session reuse create exotic failure modes. | **Bucket and defer.** Incarnation binding plus conservative omission covers the meaningful stock-writer consequence. Do not build separate machinery for every arbitrary SQL-writer behavior. |
 | Current tests sometimes use words such as “prove” for an ordering observation or a narrower protocol path. | **Correct claims as touched.** Keep representative tests, but describe exactly the path and invariant they exercise. |
 
 ## Implemented ledger milestone
@@ -158,7 +160,7 @@ failure or a deliberate expansion of the threat model.
 
 ## Verification at completion
 
-`make all` passed Ruff, mypy, Pyright, and the complete ordinary suite: 191 tests
+`make all` passed Ruff, mypy, Pyright, and the complete ordinary suite: 210 tests
 passed and 9 opt-in external-runtime tests were skipped because no real Goose/session
 fixture was selected. `make test-apptainer-contextfs` also passed the real
 Apptainer/FUSE mechanics, isolation, projection-policy, and cleanup proof. The

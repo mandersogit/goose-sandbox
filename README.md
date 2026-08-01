@@ -11,9 +11,11 @@ The shared tool surface is:
 
 - `sandbox_status()`: reports the requested sandbox configuration and confirms that execution remains disabled.
 - `calculate(expression)`: evaluates bounded basic arithmetic with parentheses and `+`, `-`, `*`, `/`, `//`, `%`, and `**`.
-- `session_context(path="", offset=0, limit=65536, tail=False)`: lists or reads
+- `session_context(path="", offset=0, limit=65536, tail=False, view_id="")`: lists or reads
   bounded, read-only virtual files projected from the current Goose session. A tail
-  read resolves the final `limit` bytes inside the trusted projection.
+  read resolves the final `limit` bytes inside the trusted projection. A returned
+  process-local `view_id` can continue the exact same session/operation/path/schema
+  snapshot.
 
 The calculator parses expressions with Python's `ast` module and recursively evaluates only explicitly supported numeric nodes. It never evaluates the source or compiles the accepted tree into executable bytecode. Expression length, AST size, exponent magnitude, finite numbers, and intermediate result magnitude are bounded.
 
@@ -257,7 +259,8 @@ without changing Goose. The public schema-v3 operation projector consumes valid
 same-epoch captures, verifies the ledger and database/session incarnation on every
 operation, and pins continuations with opaque 256-bit view tokens under bounded LRU
 limits. It uses capped counts and recent discovery, bounded transcript and file bytes,
-and on-demand exact physical lookup outside the recent window. Both MCP adapters share
+verified owned query indexes, stable omission for malformed or normalization-amplified
+content, and on-demand exact physical lookup outside the recent window. Both MCP adapters share
 this implementation and response envelope; direct and Apptainer dispatch are checked
 for matching list/read/error behavior. Project-managed launches still force tool-pair
 summarization off as a defensive operational default, while deterministic enabled-mode

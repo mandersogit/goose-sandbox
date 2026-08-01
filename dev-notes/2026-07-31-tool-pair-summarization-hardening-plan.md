@@ -46,7 +46,8 @@ at those checkpoints and are superseded by the current completion summary above.
 
 Ledger schema v2 is fingerprinted in `tests/fixtures/disclosure-ledger-v2.json`. It adds
 bounded timestamp handling, capture-disable/degradation state, capped bootstrap
-ambiguity accounting, and database/session-incarnation identity. Runtime row, byte, and
+ambiguity accounting, strict JSON-boolean eligibility, verified current-row indexes,
+and persisted-nonce database/session-incarnation identity. Runtime row, byte, and
 accounting failures preserve the Goose write while advancing the coverage epoch and
 hiding the now-ambiguous capture generation. Schema v1 remains only as a historical
 fixture; there is no in-place pre-release migration, so an isolated development Goose
@@ -54,13 +55,14 @@ root containing v1 objects must be recreated before using this version.
 
 The public schema-v3 operation path uses at most 256 recent descriptors, capped counts,
 a 64 MiB aggregate source-content preflight, 4 MiB descriptor storage, 1 MiB transcript
-and file limits, and the bounded process-local view cache. Stable physical files omit
+and file limits, and the bounded process-local view cache. Invalid UTF-8 or amplified
+normalized output becomes an explicit stable omission. Stable physical files omit
 view-relative ordinals and visibility. A validated source-row path can be queried
 directly outside the recent window, and direct/Apptainer rendering starts from the same
 immutable operation result.
 
 At this checkpoint, `make all` passes Ruff, mypy, Pyright, and the ordinary suite with
-191 passed and 9 opt-in external-runtime tests skipped. The real
+210 passed and 9 opt-in external-runtime tests skipped. The real
 `make test-apptainer-contextfs` proof also passes.
 
 ## Test foundation implemented

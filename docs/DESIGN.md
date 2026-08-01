@@ -54,9 +54,12 @@ Goose is launched with `--no-profile` and exactly one `--with-extension` argumen
   launcher force-disables tool-pair summarization as an operational default, but the
   projection is designed and tested to tolerate its archival writes when enabled.
 - Both MCP entry points atomically install and verify project-owned, namespaced schema-v2
-  SQLite capture-ledger tables and triggers before starting stdio. Every public context
+  SQLite capture-ledger tables, indexes, and triggers before starting stdio. Eligibility
+  requires JSON boolean `true`, not a numerically equivalent value. Every public context
   operation verifies the exact session, schema, accounting, coverage epoch, and
-  database/session incarnation again. There is no unprepared module-level server.
+  database/session incarnation again. A persisted random database nonce distinguishes
+  independent databases even after same-inode replacement. There is no unprepared
+  module-level server.
 - Ledger quota or accounting failure does not brick a stock Goose transaction. It
   advances the coverage epoch, marks coverage incomplete, disables further capture,
   and makes ambiguous older entries ineligible for fresh projections.
@@ -77,7 +80,9 @@ Goose is launched with `--no-profile` and exactly one `--with-extension` argumen
   snapshot. Recent discovery is a contiguous newest window of at most 256 descriptors;
   validated exact physical-row lookup is independent of that window. Stable message
   files omit view-relative ordinals and visibility, while descriptors and manifests
-  carry coarse eligibility evidence and explicit truncation/lower-bound state.
+  carry coarse eligibility evidence and explicit truncation/lower-bound state. Invalid
+  UTF-8 and normalization amplification degrade the affected content to stable omission
+  records rather than failing the operation.
 - No read, write, or shell tools until a real backend is selected and tested.
 - Hostile Linux commands use an independent workspace snapshot, immutable runtime,
   offline network namespace, seccomp, cgroup limits, hard storage quotas, and reviewed

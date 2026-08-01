@@ -1,0 +1,60 @@
+commits:
+  - message: |
+      fix: harden session projection against hostile rows
+
+      Require exact JSON-boolean eligibility, pin bounded current-row query
+      indexes, and bind database incarnations to persisted random nonces.
+      Degrade invalid UTF-8 and normalization-amplified content per row while
+      preserving stable message identity across ledger archival.
+    files:
+      - src/sandboxed_goose/contextfs/eligibility.py
+      - src/sandboxed_goose/contextfs/disclosure_ledger.py
+      - src/sandboxed_goose/contextfs/goose_session.py
+      - src/sandboxed_goose/contextfs/operation_projection.py
+      - src/sandboxed_goose/contextfs/view_store.py
+
+  - message: |
+      fix: align session tool adapters and transports
+
+      Enforce the same closed argument schemas in the official SDK and
+      FastMCP adapters, retain continuable direct-call views, accept valid
+      reads beyond EOF in both transports, and let the sustained driver
+      advance after its source-row count becomes a declared lower bound.
+    files:
+      - src/sandboxed_goose/contextfs/apptainer.py
+      - src/sandboxed_goose/live_test.py
+      - src/sandboxed_goose/mcp_sdk/server.py
+      - src/sandboxed_goose/tools/session_context.py
+
+  - message: |
+      test: cover adversarial session projection regressions
+
+      Reproduce schema-valid normalization amplification, invalid UTF-8,
+      malformed visibility, same-inode database replacement, archived ID
+      stability, long-session count saturation, strict adapter arguments,
+      EOF validation, and timeout process-group cleanup.
+    files:
+      - tests/fixtures/disclosure-ledger-v2.json
+      - tests/test_contextfs_apptainer.py
+      - tests/test_disclosure_ledger.py
+      - tests/test_goose_session_projection.py
+      - tests/test_live_test.py
+      - tests/test_operation_projection.py
+      - tests/test_real_session_contextfs.py
+      - tests/test_server.py
+
+  - message: |
+      docs: record adversarial review fixes and boundaries
+
+      Capture the independent review results, exact compatibility
+      consequence, verification evidence, fixed representation guarantees,
+      and the exotic SQLite-writer cases deliberately left in the existing
+      trusted-writer bucket.
+    files:
+      - README.md
+      - dev-notes/2026-07-31-ledger-adversarial-review-synthesis.md
+      - dev-notes/2026-07-31-ledger-follow-up-adversarial-review.md
+      - dev-notes/2026-07-31-tool-pair-summarization-hardening-plan.md
+      - dev-notes/README.md
+      - dev-notes/commit-plans/2026-07-31-adversarial-review-fixes.yaml
+      - docs/DESIGN.md
