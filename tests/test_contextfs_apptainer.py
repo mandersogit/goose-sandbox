@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +17,7 @@ from sandboxed_goose.config import (
 from sandboxed_goose.contextfs.bundle import load_bundle
 from sandboxed_goose.contextfs.goose_session import SessionProjection
 from sandboxed_goose.contextfs.model import ProjectionError
+from sandboxed_goose.contextfs.reader import render_mounted_path
 
 
 def _settings(tmp_path: Path) -> Settings:
@@ -145,3 +149,62 @@ def test_launcher_rejects_unconfigured_or_invalid_output(tmp_path: Path) -> None
             offset=0,
             limit=1024,
         )
+
+
+@pytest.mark.parametrize("offset", [3, 99])
+def test_fixed_reader_and_host_validator_accept_empty_reads_at_or_beyond_eof(
+    tmp_path: Path,
+    offset: int,
+) -> None:
+    root = tmp_path / "context"
+    root.mkdir()
+    (root / "value.txt").write_text("abc", encoding="utf-8")
+    encoded = render_mounted_path(root, "value.txt", offset=offset, limit=16).encode()
+
+    rendered = apptainer_module._validate_response(encoded, "value.txt", offset, 16)
+
+    envelope = json.loads(rendered)
+    assert envelope["content"] == ""
+    assert envelope["next_offset"] is None
+
+
+def test_host_validator_rejects_content_extending_past_declared_eof() -> None:
+    encoded = json.dumps(
+        {
+            "content": "abcdef",
+            "next_offset": None,
+            "offset": 0,
+            "path": "/context/value.txt",
+            "read_only": True,
+            "size": 3,
+            "type": "file",
+        }
+    ).encode()
+
+    with pytest.raises(ProjectionError, match="invalid file bounds"):
+        apptainer_module._validate_response(encoded, "value.txt", 0, 16)
+
+
+@pytest.mark.skipif(not Path("/proc").is_dir(), reason="requires Linux process inspection")
+def test_process_timeout_terminates_the_reader_process_group(tmp_path: Path) -> None:
+    child_pid_path = tmp_path / "child.pid"
+    program = (
+        "import pathlib,subprocess,sys,time; "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
+        f"pathlib.Path({str(child_pid_path)!r}).write_text(str(child.pid)); "
+        "time.sleep(60)"
+    )
+
+    with pytest.raises(ProjectionError, match="timed out"):
+        apptainer_module._run_process(
+            [sys.executable, "-c", program],
+            os.environ.copy(),
+            timeout=0.2,
+        )
+
+    child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+    child_proc = Path(f"/proc/{child_pid}")
+    deadline = time.monotonic() + 1.0
+    while child_proc.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not child_proc.exists()

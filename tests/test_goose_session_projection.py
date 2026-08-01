@@ -629,6 +629,37 @@ def test_public_operation_tree_lists_and_reads_same_epoch_ledger_history(
     assert manifest["ledger_history_merged"] is True
 
 
+def test_direct_callers_can_continue_the_process_default_view_store(tmp_path: Path) -> None:
+    database = StockGooseDatabase.create(tmp_path / "default-view-store.db")
+    bootstrap_disclosure_ledger(database.path, "primary")
+    database.add_message(
+        "primary",
+        message_id="one",
+        role="user",
+        content=[{"type": "text", "text": "one"}],
+        created_timestamp=1,
+        metadata=visible_metadata(),
+    )
+    settings = Settings(session_database=database.path)
+
+    first = json.loads(
+        render_session_context(settings, "primary", path="manifest.json", limit=1)
+    )
+    continuation = json.loads(
+        render_session_context(
+            settings,
+            "primary",
+            path="manifest.json",
+            offset=first["next_offset"],
+            limit=64 * 1024,
+            view_id=first["view_id"],
+        )
+    )
+
+    assert continuation["view_id"] == first["view_id"]
+    assert continuation["view_reused"] is True
+
+
 def test_public_direct_and_apptainer_dispatch_have_matching_results(
     goose_database: Path,
     tmp_path: Path,

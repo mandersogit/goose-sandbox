@@ -15,13 +15,17 @@ from sandboxed_goose.contextfs.disclosure_ledger import (
     bootstrap_disclosure_ledger,
     verify_disclosure_ledger,
 )
-from sandboxed_goose.contextfs.goose_session import render_stable_message_artifact
+from sandboxed_goose.contextfs.goose_session import (
+    project_goose_session,
+    render_stable_message_artifact,
+)
 from sandboxed_goose.contextfs.model import ProjectionError
 from sandboxed_goose.contextfs.operation_projection import (
     OPERATION_PROJECTION_SCHEMA_VERSION,
     query_session_operation_descriptors,
 )
 from sandboxed_goose.contextfs.view_store import (
+    MAX_VIEW_FILE_BYTES,
     LedgerCoverageIdentity,
     SessionOperation,
     SessionOperationRequest,
@@ -408,6 +412,48 @@ def test_view_from_another_database_incarnation_is_revoked(tmp_path: Path) -> No
         )
 
 
+def test_same_inode_database_replacement_revokes_a_pinned_view(tmp_path: Path) -> None:
+    destination = StockGooseDatabase.create(tmp_path / "destination.db")
+    replacement = StockGooseDatabase.create(tmp_path / "replacement.db")
+    for database, marker in ((destination, "DESTINATION"), (replacement, "REPLACEMENT")):
+        bootstrap_disclosure_ledger(database.path, "primary")
+        database.add_message(
+            "primary",
+            message_id=marker,
+            role="user",
+            content=[{"type": "text", "text": marker}],
+            created_timestamp=1,
+            metadata=visible_metadata(),
+        )
+
+    request = _request()
+    result = query_session_operation_descriptors(destination.path, request)
+    store = SessionViewStore()
+    view = store.create(request, result)
+    original_inode = destination.path.stat().st_ino
+
+    source_connection = replacement.connect()
+    destination_connection = destination.connect()
+    try:
+        source_connection.backup(destination_connection)
+    finally:
+        destination_connection.close()
+        source_connection.close()
+
+    assert destination.path.stat().st_ino == original_inode
+    replacement_coverage = _coverage(destination.path)
+    assert replacement_coverage.database_identity != result.ledger_coverage.database_identity
+    with pytest.raises(ViewExpiredError, match="revoked"):
+        store.get(
+            view.view_id,
+            request,
+            current_ledger_coverage=replacement_coverage,
+        )
+    assert b"REPLACEMENT" in query_session_operation_descriptors(
+        destination.path, request
+    ).descriptor_data
+
+
 def test_stable_message_artifact_filters_content_and_has_no_generation_fields() -> None:
     content = [
         {"type": "text", "text": "VISIBLE"},
@@ -654,6 +700,197 @@ def test_stable_file_limit_is_checked_before_result_creation(
 
     with pytest.raises(ViewTooLargeError, match="stable message file"):
         query_session_operation_descriptors(stock_database.path, _request())
+
+
+def test_normalized_file_amplification_degrades_only_the_offending_content(
+    stock_database: StockGooseDatabase,
+) -> None:
+    bootstrap_disclosure_ledger(stock_database.path, "primary")
+    arguments = {"values": [[0] * 256 for _ in range(256)]}
+    content = [
+        {
+            "type": "toolRequest",
+            "toolCall": {
+                "status": "success",
+                "value": {"name": "calculate", "arguments": arguments},
+            },
+        }
+    ]
+    content_json = canonical_json(content)
+    assert len(content_json.encode()) < 512 * 1024
+    amplified = render_stable_message_artifact(
+        projection_schema_version=3,
+        source_row_id=1,
+        message_id="amplified",
+        message_id_status="available",
+        role="assistant",
+        created=1,
+        source_content_bytes=len(content_json.encode()),
+        content_json=content_json,
+    )
+    assert len(amplified.file_bytes) > MAX_VIEW_FILE_BYTES
+
+    source_row_id = stock_database.add_message(
+        "primary",
+        message_id="amplified",
+        role="assistant",
+        content=content,
+        created_timestamp=1,
+        metadata=visible_metadata(),
+    )
+    result = query_session_operation_descriptors(stock_database.path, _request())
+    descriptor = _document(result)["messages"][0]
+    assert descriptor["omissions"] == ["normalized-content-byte-limit"]
+    assert descriptor["stable_file_size"] <= MAX_VIEW_FILE_BYTES
+
+    path = _physical_path(source_row_id)
+    exact = query_session_operation_descriptors(
+        stock_database.path,
+        _request(SessionOperation.EXACT_OBJECT, path),
+    )
+    payload = json.loads(exact.file_bytes(path))
+    assert payload["content"] == [
+        {
+            "type": "omitted",
+            "originalType": "message-content",
+            "reason": "normalized-content-byte-limit",
+            "sourceBytes": len(content_json.encode()),
+        }
+    ]
+
+    legacy = project_goose_session(stock_database.path, "primary")
+    legacy_payload = json.loads(legacy.files[path])
+    assert legacy_payload["omissions"] == ["normalized-content-byte-limit"]
+
+
+def test_invalid_utf8_text_degrades_stably_before_and_after_archive(
+    stock_database: StockGooseDatabase,
+) -> None:
+    bootstrap_disclosure_ledger(stock_database.path, "primary")
+    connection = stock_database.connect()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        source_row_id = int(
+            connection.execute(
+                """
+                INSERT INTO messages
+                    (message_id, session_id, role, content_json,
+                     created_timestamp, metadata_json)
+                VALUES (CAST(X'FF' AS TEXT), 'primary', 'user',
+                        CAST(X'FF5B5D' AS TEXT), 1, ?)
+                RETURNING id
+                """,
+                (canonical_json(visible_metadata()),),
+            ).fetchone()[0]
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    path = _physical_path(source_row_id)
+    request = _request(SessionOperation.EXACT_OBJECT, path)
+    current = query_session_operation_descriptors(stock_database.path, request)
+    current_descriptor = _document(current)["messages"][0]
+    assert current_descriptor["message_id_status"] == "invalid"
+    assert current_descriptor["omissions"] == ["invalid-content-encoding"]
+    legacy = project_goose_session(stock_database.path, "primary")
+    legacy_payload = json.loads(legacy.files[path])
+    assert legacy_payload["messageId"] is None
+    assert legacy_payload["omissions"] == ["invalid-content-encoding"]
+
+    connection = stock_database.connect()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            "UPDATE messages SET metadata_json = ? WHERE id = ?",
+            (canonical_json(user_only_metadata()), source_row_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    archived = query_session_operation_descriptors(stock_database.path, request)
+    assert _document(archived)["messages"][0]["context_visibility"] == "ledger-captured"
+    assert archived.file_bytes(path) == current.file_bytes(path)
+
+
+@pytest.mark.parametrize(
+    ("message_id", "expected_status"),
+    [
+        ("oversized", "oversized"),
+        (sqlite3.Binary(b"x"), "invalid"),
+    ],
+)
+def test_message_id_status_and_artifact_remain_stable_after_archive(
+    stock_database: StockGooseDatabase,
+    message_id: object,
+    expected_status: str,
+) -> None:
+    limits = LedgerLimits(max_message_id_bytes=4)
+    bootstrap_disclosure_ledger(stock_database.path, "primary", limits=limits)
+    connection = stock_database.connect()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        source_row_id = int(
+            connection.execute(
+                """
+                INSERT INTO messages
+                    (message_id, session_id, role, content_json,
+                     created_timestamp, metadata_json)
+                VALUES (?, 'primary', 'user', '[]', 1, ?)
+                RETURNING id
+                """,
+                (message_id, canonical_json(visible_metadata())),
+            ).fetchone()[0]
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    path = _physical_path(source_row_id)
+    request = _request(SessionOperation.EXACT_OBJECT, path)
+    current = query_session_operation_descriptors(stock_database.path, request)
+    assert _document(current)["messages"][0]["message_id_status"] == expected_status
+
+    connection = stock_database.connect()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            "UPDATE messages SET metadata_json = ? WHERE id = ?",
+            (canonical_json(user_only_metadata()), source_row_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    archived = query_session_operation_descriptors(stock_database.path, request)
+    assert _document(archived)["messages"][0]["message_id_status"] == expected_status
+    assert archived.file_bytes(path) == current.file_bytes(path)
+
+
+def test_oversized_message_id_does_not_consume_the_retained_identity_budget(
+    stock_database: StockGooseDatabase,
+) -> None:
+    bootstrap_disclosure_ledger(stock_database.path, "primary")
+    stock_database.add_message(
+        "primary",
+        message_id="ordinary",
+        role="user",
+        content=[],
+        created_timestamp=1,
+        metadata=visible_metadata(),
+    )
+    stock_database.add_message(
+        "primary",
+        message_id="x" * (4 * 1024 * 1024 + 1),
+        role="assistant",
+        content=[],
+        created_timestamp=2,
+        metadata=visible_metadata(),
+    )
+
+    document = _document(query_session_operation_descriptors(stock_database.path, _request()))
+    assert document["content_window_truncated"] is False
+    assert len(document["messages"]) == 2
+    assert document["messages"][1]["message_id_status"] == "oversized"
 
 
 @pytest.mark.parametrize(

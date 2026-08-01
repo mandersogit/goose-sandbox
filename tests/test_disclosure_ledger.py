@@ -29,6 +29,7 @@ from sandboxed_goose.contextfs.disclosure_ledger import (
     open_verified_disclosure_snapshot,
     verify_disclosure_ledger,
 )
+from sandboxed_goose.contextfs.goose_session import CURRENT_MESSAGE_SQL
 from tests.support.stock_goose import (
     StockGooseDatabase,
     agent_only_metadata,
@@ -184,6 +185,57 @@ def test_bootstrap_seeds_only_currently_visible_bound_session_rows(
 
     assert bootstrap_disclosure_ledger(stock_database.path, "primary") == status
     assert verify_disclosure_ledger(stock_database.path, "primary") == status
+
+
+def test_only_json_boolean_true_is_eligible_and_current_queries_use_owned_indexes(
+    stock_database: StockGooseDatabase,
+) -> None:
+    bootstrap_disclosure_ledger(stock_database.path, "primary")
+    connection = stock_database.connect()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        values: list[object] = [True, 1, 1.0, "1", None, [], {}]
+        for ordinal, value in enumerate(values, start=1):
+            connection.execute(
+                """
+                INSERT INTO messages
+                    (message_id, session_id, role, content_json,
+                     created_timestamp, metadata_json)
+                VALUES (?, 'primary', 'user', '[]', ?, ?)
+                """,
+                (
+                    f"visibility-{ordinal}",
+                    ordinal,
+                    canonical_json({"agentVisible": value}),
+                ),
+            )
+        connection.commit()
+
+        captured = connection.execute(
+            f"SELECT message_id FROM {ENTRY_TABLE} WHERE session_id = 'primary'"
+        ).fetchall()
+        assert [row[0] for row in captured] == ["visibility-1"]
+        eligible = connection.execute(
+            f"SELECT message_id FROM messages WHERE session_id = ? AND {CURRENT_MESSAGE_SQL}",
+            ("primary",),
+        ).fetchall()
+        assert [row[0] for row in eligible] == ["visibility-1"]
+
+        plan = connection.execute(
+            f"""
+            EXPLAIN QUERY PLAN
+            SELECT id FROM messages
+            WHERE session_id = ? AND {CURRENT_MESSAGE_SQL}
+            ORDER BY created_timestamp DESC, id DESC
+            LIMIT 257
+            """,
+            ("primary",),
+        ).fetchall()
+        assert any(
+            "sandboxed_goose_disclosure_current_messages" in str(row[3]) for row in plan
+        )
+    finally:
+        connection.close()
 
 
 def test_bootstrap_reports_a_bounded_ambiguous_row_lower_bound(

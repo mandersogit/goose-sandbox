@@ -19,6 +19,7 @@ from sandboxed_goose.live_test import (
     _audit_prompt,
     _base_environment,
     _initial_prompt,
+    _projection_report,
     audit_expected_result,
     select_audit_target,
     verify_audit_turn,
@@ -195,6 +196,37 @@ def _response(tool_id: str, envelope: dict[str, object]) -> dict[str, Any]:
             },
         },
     }
+
+
+def test_projection_report_accepts_snapshot_growth_after_count_becomes_a_lower_bound(
+    tmp_path: Path,
+) -> None:
+    database = _database(tmp_path)
+    _insert(
+        database,
+        [
+            ("user", [{"type": "text", "text": f"seed-{ordinal}"}])
+            for ordinal in range(257)
+        ],
+    )
+    before = project_goose_session(database, "primary")
+    before_manifest = json.loads(before.files["manifest.json"])
+    assert before_manifest["source_message_rows"] == 257
+    assert "source_message_rows" in before_manifest["count_lower_bounds"]
+
+    marker = "CURRENT_AFTER_COUNT_CAP"
+    _insert(database, [("assistant", [{"type": "text", "text": marker}])])
+    report = _projection_report(
+        database,
+        "primary",
+        required_marker=marker,
+        forbidden_marker="ABSENT_DECOY",
+        previous_snapshot_id=before.snapshot_id,
+        previous_source_rows=257,
+    )
+
+    assert report["source_message_rows"] == 257
+    assert report["source_message_rows_is_lower_bound"] is True
 
 
 def _file_envelope(path: str, size: int, offset: int, content: str) -> dict[str, object]:

@@ -3,6 +3,8 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
+from fastmcp.exceptions import ValidationError as FastMCPValidationError
+from mcp.server.mcpserver.exceptions import ToolError as MCPSDKToolError
 
 from sandboxed_goose.config import Settings
 from sandboxed_goose.fastmcp.server import build_server as build_fastmcp_server
@@ -81,12 +83,17 @@ async def test_frameworks_expose_equivalent_public_contract() -> None:
         mcp_sdk_schema = mcp_sdk_tool.input_schema
         fastmcp_schema = fastmcp_tool.parameters
         assert mcp_sdk_schema["type"] == fastmcp_schema["type"] == "object"
+        assert mcp_sdk_schema["additionalProperties"] is False
+        assert fastmcp_schema["additionalProperties"] is False
         assert set(mcp_sdk_schema["properties"]) == set(fastmcp_schema["properties"])
         assert mcp_sdk_schema.get("required", []) == fastmcp_schema.get("required", [])
         for property_name in mcp_sdk_schema["properties"]:
             assert (
                 mcp_sdk_schema["properties"][property_name]["type"]
                 == fastmcp_schema["properties"][property_name]["type"]
+            )
+            assert mcp_sdk_schema["properties"][property_name].get("default") == (
+                fastmcp_schema["properties"][property_name].get("default")
             )
 
     mcp_sdk_result = await mcp_sdk.call_tool("sandbox_status", {})
@@ -99,3 +106,21 @@ async def test_frameworks_expose_equivalent_public_contract() -> None:
     fastmcp_result = await fastmcp.call_tool("calculate", arguments)
     assert mcp_sdk_result.content[0].text == fastmcp_result.content[0].text
     assert mcp_sdk_result.structured_content == fastmcp_result.structured_content
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        ("sandbox_status", {"extra": True}),
+        ("calculate", {"expression": "1", "extra": True}),
+        ("session_context", {"extra": True}),
+    ],
+)
+@pytest.mark.parametrize("build_server", SERVER_BUILDERS)
+async def test_both_frameworks_reject_unknown_tool_arguments(
+    build_server: ServerBuilder,
+    tool_name: str,
+    arguments: dict[str, object],
+) -> None:
+    with pytest.raises((FastMCPValidationError, MCPSDKToolError)):
+        await build_server(None).call_tool(tool_name, arguments)

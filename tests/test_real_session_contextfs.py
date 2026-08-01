@@ -260,9 +260,11 @@ async def test_real_many_turn_session_is_read_through_apptainer_fuse(
             break
         direct_offset = next_offset
 
-    assert direct_manifest["counts"]["source_message_rows"] >= fixture["primary_turns"] * 2
-    assert direct_manifest["descriptor_count"] >= fixture["primary_turns"] * 2
-    assert f"{fixture['primary_marker_prefix']}_TURN_001" in direct_transcript.decode()
+    expected_source_rows = fixture["primary_turns"] * 2
+    assert direct_manifest["counts"]["source_message_rows"] >= min(expected_source_rows, 257)
+    assert direct_manifest["descriptor_count"] >= min(expected_source_rows, 256)
+    if expected_source_rows <= 256:
+        assert f"{fixture['primary_marker_prefix']}_TURN_001" in direct_transcript.decode()
     assert (
         f"{fixture['primary_marker_prefix']}_TURN_{fixture['primary_turns']:03d}"
         in direct_transcript.decode()
@@ -405,7 +407,7 @@ def test_real_goose_resumes_selected_session_and_calls_fuse_context(
     envelope = json.loads(tool_results[0])
     manifest = json.loads(envelope["content"])
     assert manifest["session_id"] == session_id
-    assert manifest["counts"]["source_message_rows"] >= fixture["primary_turns"] * 2
+    assert manifest["counts"]["source_message_rows"] >= min(fixture["primary_turns"] * 2, 257)
     assert _fuse_connections() == connections_before
     runs = settings.apptainer_state / "session-context-runs"
     assert not runs.exists() or list(runs.iterdir()) == []
