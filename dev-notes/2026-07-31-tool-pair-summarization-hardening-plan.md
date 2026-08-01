@@ -114,6 +114,38 @@ suite: 122 tests passed and 9 explicitly configured integration tests were skipp
 because their external runtimes were not selected. The real summarization control
 described above was run separately with `GOOSE_BIN` pointing at the clean stock build.
 
+## Operation-pinned view-store checkpoint
+
+`sandboxed_goose.contextfs.view_store` now provides the internal foundation for the
+next projection contract:
+
+- explicit `recent-tree`, `directory-page`, `exact-object`, `transcript`, and
+  `manifest` operation identities bound to the exact session, canonical path, and
+  projection schema;
+- immutable bounded descriptor data and materialized file results with a required full
+  256-bit snapshot digest;
+- opaque random 256-bit view IDs and exact continuation binding to the ledger schema
+  version, schema fingerprint, and coverage epoch;
+- a thread-safe process-local LRU with the planned four-view per-session, sixteen-view
+  per-process, 32 MiB cache, and ten-minute idle hard maxima; and
+- typed `view_expired`, `view_mismatch`, and `view_too_large` failures without echoing
+  attacker-controlled tokens.
+
+Thirty-four focused tests cover validation, immutable copying, token collision and
+entropy-source failures, binding mismatch, ledger revocation, idle refresh and expiry,
+session/process/byte LRU behavior, non-destructive oversize failure, explicit
+revocation, hard-limit tightening, accounting, and concurrent creation. Branch
+coverage for the module is 99%; the only uncovered lines are defensive assertions for
+internally inconsistent LRU or byte accounting.
+
+The store deliberately owns no database transaction and is not exposed by either MCP
+adapter yet. Operation-aware descriptor queries must land next; only then can the
+server instantiate and use one store for its public v2 continuations.
+
+With this foundation included, `make all` passes Ruff, mypy, Pyright, and the complete
+ordinary suite: 156 tests passed and 9 explicitly configured integration tests were
+skipped because their external runtimes were not selected.
+
 ## Verified Goose writer contract
 
 The tests must reproduce the pinned Goose implementation rather than a convenient
@@ -621,10 +653,11 @@ separate full-compaction gate remains open.
 2. **Complete:** Integrate ledger bootstrap and verification into both MCP startup
    paths, and prove it finishes before the first provider request even when the model
    never calls a tool.
-3. **Next:** Add operation request/result types and the bounded `SessionViewStore`;
-   test token binding, eviction, expiry, and resource limits.
-4. Refactor projection to operation-aware descriptor queries and minimal bundles before
-   adding new identity files.
+3. **Complete (internal foundation):** Add operation request/result types and the
+   bounded `SessionViewStore`; test token binding, eviction, expiry, and resource
+   limits.
+4. **Next:** Refactor projection to operation-aware descriptor queries and minimal
+   bundles before adding new identity files.
 5. Add the public v2 envelope builder and typed MCP errors; keep both adapters in sync
    and align direct/FUSE EOF behavior.
 6. Implement schema-v3 physical identity files, view-scoped indexes/transcripts, full

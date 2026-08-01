@@ -253,7 +253,9 @@ operation-pinned views and the ledger merge are complete, so its public stock-Go
 output still excludes rows after they become agent-invisible. The launcher therefore
 continues to force tool-pair summarization off. The tracked provenance patch is
 retained only as historical development evidence, not as an installation or
-acceptance requirement. The
+acceptance requirement. An internal bounded view store now provides opaque 256-bit
+tokens, exact operation and ledger-generation binding, idle expiry, and LRU resource
+limits, but it is not connected to the public MCP contract yet. The
 [hardening plan](dev-notes/2026-07-31-tool-pair-summarization-hardening-plan.md)
 records the completed capture layer and the remaining projection work.
 

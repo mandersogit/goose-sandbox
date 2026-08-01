@@ -58,6 +58,11 @@ Goose is launched with `--no-profile` and exactly one `--with-extension` argumen
 - The projector does not consume ledger entries yet. Archived-history recovery remains
   fail-closed until bounded operation-pinned views and the validated stock-row/ledger
   merge are implemented.
+- The framework-neutral operation/view types and bounded process-local
+  `SessionViewStore` are implemented with 256-bit random tokens, exact
+  session/operation/path/schema and ledger-generation binding, idle expiry, and LRU
+  count/byte limits. They remain internal until operation-aware descriptor queries and
+  the public continuation envelope are implemented.
 - No read, write, or shell tools until a real backend is selected and tested.
 - Hostile Linux commands use an independent workspace snapshot, immutable runtime,
   offline network namespace, seccomp, cgroup limits, hard storage quotas, and reviewed

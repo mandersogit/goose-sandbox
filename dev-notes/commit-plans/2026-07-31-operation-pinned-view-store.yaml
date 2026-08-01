@@ -1,0 +1,33 @@
+commits:
+  - message: |
+      feat: add the bounded session view store
+
+      Define immutable operation requests and results, full snapshot and ledger
+      generation identities, and a thread-safe process-local LRU. Bind opaque
+      256-bit continuation tokens to the exact session, operation, path, schema,
+      and ledger state while enforcing hard count, byte, and idle limits.
+    files:
+      - src/sandboxed_goose/contextfs/view_store.py
+
+  - message: |
+      test: verify pinned view lifecycle invariants
+
+      Exercise strict input bounds, immutable material, token opacity and
+      collision handling, binding mismatch, ledger revocation, idle expiry,
+      per-session and process LRU eviction, byte accounting, failure atomicity,
+      explicit cleanup, and concurrent creation.
+    files:
+      - tests/test_session_view_store.py
+
+  - message: |
+      docs: record the operation view-store checkpoint
+
+      Bring the public design and hardening record up to date: the internal
+      bounded store is implemented and verified, while operation-aware queries,
+      public continuations, and ledger-backed projection remain deliberately
+      unavailable until their later gates are complete.
+    files:
+      - README.md
+      - dev-notes/2026-07-31-tool-pair-summarization-hardening-plan.md
+      - dev-notes/commit-plans/2026-07-31-operation-pinned-view-store.yaml
+      - docs/DESIGN.md
