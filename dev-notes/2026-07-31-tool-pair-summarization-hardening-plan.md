@@ -1,5 +1,12 @@
 # Tool-pair summarization hardening plan
 
+> **Scope update (2026-07-31):** The
+> [adversarial review synthesis](2026-07-31-ledger-adversarial-review-synthesis.md)
+> defines the active milestone and supersedes this plan where they differ. The larger
+> deterministic program below remains an extended-hardening catalog; fifty batches,
+> exact complete namespaces/counts, and exhaustive transport/interleaving matrices are
+> not current acceptance gates.
+
 ## Status and decision
 
 Two independent adversarial reviews found that the first version of this plan was not
@@ -24,14 +31,37 @@ The revised decision is:
 - deterministic providers and database state machines are the acceptance tests. A
   live language model is optional smoke coverage only.
 
-The current projector remains disclosure-safe because it fails closed on unproven
-rows and reads each projection in one SQLite transaction. The project-owned ledger now
-captures future prior-disclosure proof, but the current projector deliberately does not
-consume those rows until operation-pinned views and their verification boundary are in
-place. It therefore still cannot recover a stock row after Goose marks it
-agent-invisible. The projection is not yet consistency- or availability-hardened for
-repeated concurrent summarization, multi-call traversal, or history beyond the recent
-window.
+The narrower milestone selected by the adversarial review synthesis is implemented.
+The schema-v2 ledger captures bounded eligible forms and degrades without aborting
+ordinary Goose writes. The public schema-v3 operation projector merges valid current
+rows with same-incarnation, same-epoch captures; it rejects the experimental history
+field, verifies the exact ledger at each request, pins bounded continuations, and keeps
+exact physical-row lookup independent of the capped recent window.
+
+This document remains an extended-hardening catalog. Its older checkpoint sections are
+retained to explain how the implementation evolved; their stated limitations were true
+at those checkpoints and are superseded by the current completion summary above.
+
+## Current schema-v2 and public-operation checkpoint
+
+Ledger schema v2 is fingerprinted in `tests/fixtures/disclosure-ledger-v2.json`. It adds
+bounded timestamp handling, capture-disable/degradation state, capped bootstrap
+ambiguity accounting, and database/session-incarnation identity. Runtime row, byte, and
+accounting failures preserve the Goose write while advancing the coverage epoch and
+hiding the now-ambiguous capture generation. Schema v1 remains only as a historical
+fixture; there is no in-place pre-release migration, so an isolated development Goose
+root containing v1 objects must be recreated before using this version.
+
+The public schema-v3 operation path uses at most 256 recent descriptors, capped counts,
+a 64 MiB aggregate source-content preflight, 4 MiB descriptor storage, 1 MiB transcript
+and file limits, and the bounded process-local view cache. Stable physical files omit
+view-relative ordinals and visibility. A validated source-row path can be queried
+directly outside the recent window, and direct/Apptainer rendering starts from the same
+immutable operation result.
+
+At this checkpoint, `make all` passes Ruff, mypy, Pyright, and the ordinary suite with
+191 passed and 9 opt-in external-runtime tests skipped. The real
+`make test-apptainer-contextfs` proof also passes.
 
 ## Test foundation implemented
 
@@ -76,9 +106,10 @@ These tests establish the input and control oracles. They do not claim that
 operation-pinned views, ledger-backed projection, or the repeated fifty-batch
 acceptance gate has already been implemented.
 
-## Ledger implementation checkpoint
+## Historical schema-v1 ledger checkpoint
 
-`sandboxed_goose.contextfs.disclosure_ledger` now implements ledger schema version 1:
+The first implementation of `sandboxed_goose.contextfs.disclosure_ledger` used ledger
+schema version 1:
 
 - fifteen exact, fingerprinted, namespaced SQLite tables and static triggers, recorded
   in `tests/fixtures/disclosure-ledger-v1.json`;
@@ -96,25 +127,26 @@ acceptance gate has already been implemented.
 - conservative coverage-epoch advancement on deletion or session movement, with old
   epochs retained but ineligible for future projection.
 
-Both stdio entry points run the shared bootstrap before starting their framework's
-protocol loop. Direct protocol tests prove that the ledger exists before either server
-advertises tools. A manual MCP launch without `AGENT_SESSION_ID` remains available for
-tool-list inspection; once Goose supplies that binding, a missing database or invalid
-ledger fails startup.
+Both normal stdio entry points run the shared bootstrap before starting their
+framework's protocol loop. Direct protocol tests observe a prepared ledger after tool
+listing through those entry points. Request-bound enforcement and fail-closed behavior
+for unprepared framework/module-level servers remain required. A manual MCP launch
+without `AGENT_SESSION_ID` remains available for tool-list inspection; once Goose
+supplies that binding, a missing database or invalid ledger fails normal startup.
 
 Fifteen ledger state-machine tests cover bootstrap idempotence and rollback,
 cross-session isolation, persistent capture, invisible-to-visible transitions,
 archive-at-quota UPSERT behavior, row and byte rollback, omission records, deletion
-epochs, append-only enforcement, altered objects, accounting corruption, and immutable
-installed limits. The projector does not expose ledger entries yet; that remains behind
-the operation-pinned-view work.
+epochs, deletion rejection and identity immutability, altered objects, accounting
+corruption, and immutable installed limits. The projector does not expose ledger
+entries yet; that remains behind the operation-pinned-view work.
 
 At this checkpoint, `make all` passes Ruff, mypy, Pyright, and the complete ordinary
 suite: 122 tests passed and 9 explicitly configured integration tests were skipped
 because their external runtimes were not selected. The real summarization control
 described above was run separately with `GOOSE_BIN` pointing at the clean stock build.
 
-## Operation-pinned view-store checkpoint
+## Historical operation-pinned view-store checkpoint
 
 `sandboxed_goose.contextfs.view_store` now provides the internal foundation for the
 next projection contract:
@@ -138,13 +170,50 @@ revocation, hard-limit tightening, accounting, and concurrent creation. Branch
 coverage for the module is 99%; the only uncovered lines are defensive assertions for
 internally inconsistent LRU or byte accounting.
 
-The store deliberately owns no database transaction and is not exposed by either MCP
-adapter yet. Operation-aware descriptor queries must land next; only then can the
-server instantiate and use one store for its public v2 continuations.
+At this checkpoint the store deliberately owned no database transaction and was not yet
+exposed by either MCP adapter. The later schema-v3 public broker now uses it.
 
 With this foundation included, `make all` passes Ruff, mypy, Pyright, and the complete
 ordinary suite: 156 tests passed and 9 explicitly configured integration tests were
 skipped because their external runtimes were not selected.
+
+## Historical operation descriptor-query checkpoint
+
+The first internal schema-v3 query/materialization slice implemented:
+
+- one read-only transaction verifies the exact session, all ledger objects and
+  accounting, and the ledger schema/fingerprint/coverage epoch before querying rows;
+- a `LIMIT 8193` preflight bounds the complete currently projectable stock-row set at
+  8,192 descriptors and checks the 64 MiB aggregate raw-content limit before fetching
+  any content;
+- installed ledger limits bound individual content and message IDs, oversized values
+  become deterministic omission states, retained identity bytes are preflighted, and
+  descriptor serialization is capped at 4 MiB;
+- the content query streams one at most 512 KiB row at a time from the same SQLite
+  snapshot instead of retaining the full aggregate in Python;
+- canonical descriptors include physical identity, visibility, normalized-content and
+  stable-file SHA-256 digests, exact counts, operation binding, and ledger generation;
+  their complete bytes produce the 256-bit snapshot ID; and
+- `manifest` and descriptor-bounded physical message `exact-object` operations
+  materialize only their requested bounded file. Stable message files contain no
+  ordinal or visibility field. On-demand exact lookup beyond the descriptor bound
+  remains at implementation step 7.
+
+The query still uses current stock rows plus explicit metadata provenance only and
+sets `ledger_history_merged=false`; it does not expose ledger entries. A direct
+store/query integration test proves that an exact-object view retains its immutable
+sanitized bytes after stock Goose archives the row, while a later deletion-driven
+coverage-epoch change revokes that view. A concurrent WAL writer inserted a new row
+between preflight and content loading without mixing generations: the pinned result
+contained the old row/count set and a fresh operation contained the new set.
+
+Twenty operation tests plus the verified-read-snapshot lifecycle test cover exact
+session and visibility isolation, full fingerprints, per-field/row/aggregate/descriptor
+limits, omission behavior, strict dynamic SQLite types, ledger absence/tampering,
+canonical operation paths, stable sanitization, archive pinning, deletion revocation,
+same-snapshot concurrency, and bounded injected failures. With this slice included,
+`make all` passes Ruff, mypy, Pyright, and the complete ordinary suite: 177 tests passed
+and 9 explicitly configured integration tests were skipped.
 
 ## Verified Goose writer contract
 
@@ -201,6 +270,13 @@ arbitrary valid `session_context` requests and Goose writes concurrently:
 8. Direct and Apptainer/FUSE transports implement the same public contract.
 
 ## Operation-pinned views
+
+> **Implementation note:** The active milestone implements the core lifecycle below
+> with a 256-descriptor recent window, on-demand physical exact lookup, pinned file
+> chunks, and matching adapter error behavior. The original 8,192-descriptor complete
+> namespace, cursor pagination, reversible logical lookup, and typed JSON error body in
+> the remainder of this section are extended-hardening ideas, not descriptions of the
+> current public contract.
 
 ### Why snapshot comparison is insufficient
 
@@ -394,8 +470,8 @@ shown to the model. Projecting all invisible rows would disclose the latter; exc
 them is safe but incomplete. Summary text does not contain a reliable structured link
 back to every original row.
 
-Preserve future disclosure provenance without changing Goose by installing a
-project-owned append-only ledger and SQLite triggers in the stock sessions database.
+Preserve bounded Goose visibility evidence without changing Goose by installing a
+project-owned capture ledger and SQLite triggers in the stock sessions database.
 Extra tables/triggers are owned and versioned by this project; no Goose source patch or
 custom binary is required.
 
@@ -509,7 +585,8 @@ Separate failure cases causally:
 - an apply-loop storage failure prevents later generated summaries from being applied.
 
 Also inject ledger-trigger/accounting failures and prove they cannot allow Goose to
-commit an archival transition while silently losing the last disclosed form. Validate
+commit an archival transition while silently losing the last captured eligible form.
+Validate
 the documented overflow behavior separately from ordinary Goose storage failures.
 
 Add startup-order tests in which the provider immediately returns a final answer and
@@ -647,28 +724,29 @@ separate full-compaction gate remains open.
 
 ## Implementation order
 
-1. **Complete:** Implement and verify the stock-Goose ledger schema, atomic triggers,
-   bootstrap, coverage epochs, and accounting against the canonical fixture. Do not
-   expose ledger rows through the current projector yet.
-2. **Complete:** Integrate ledger bootstrap and verification into both MCP startup
-   paths, and prove it finishes before the first provider request even when the model
-   never calls a tool.
+1. **Complete:** Implement and verify the stock-Goose ledger schema, triggers,
+   bootstrap, coverage epochs, accounting, schema-v2 non-bricking degradation, and
+   database/session incarnation binding.
+2. **Complete:** Integrate ledger bootstrap into both MCP startup paths and exact-ledger
+   verification into every public context request.
 3. **Complete (internal foundation):** Add operation request/result types and the
    bounded `SessionViewStore`; test token binding, eviction, expiry, and resource
    limits.
-4. **Next:** Refactor projection to operation-aware descriptor queries and minimal
-   bundles before adding new identity files.
-5. Add the public v2 envelope builder and typed MCP errors; keep both adapters in sync
-   and align direct/FUSE EOF behavior.
-6. Implement schema-v3 physical identity files, view-scoped indexes/transcripts, full
-   snapshot fingerprints, pinned multi-chunk reads/pages, and the validated union of
-   current stock rows with same-epoch ledger rows.
-7. Add on-demand exact physical lookup, then reversible logical-ID lookup and explicit
-   degraded states.
-8. Add the fifty-batch Goose and Python state-machine suites, including causally
-   accurate failure injection.
-9. Add the real-Goose multi-call workflow, WAL concurrency suite, and direct/FUSE
-   parity suite.
+4. **Complete:** Refactor public projection to operation-aware bounded descriptor
+   queries and minimal operation bundles.
+5. **Complete for the active milestone:** Expose a shared success envelope, matching
+   adapter error behavior, and aligned direct/Apptainer list/read semantics.
+6. **Complete for the active milestone:** Implement schema-v3 stable physical files,
+   transcripts, full snapshot fingerprints, pinned multi-chunk reads, and the validated
+   union of current stock rows with same-epoch ledger captures.
+7. **Complete for physical identity:** Add on-demand exact physical lookup outside the
+   recent window. Reversible logical-ID lookup remains deliberately deferred.
+8. **Extended hardening:** Fifty-batch and exhaustive failure matrices are no longer an
+   active acceptance gate; retain the deterministic three-batch and real enabled
+   control coverage.
+9. **Representative coverage complete:** WAL snapshot, public multi-call, and
+   direct/Apptainer parity paths exist. Exhaustive interleaving matrices remain
+   extended hardening.
 10. **Complete early:** Extend the existing real-wrapper disabled regression and
     enabled inverse control to assert ledger startup ordering and enabled-mode capture.
 11. Run the optional live smoke only after deterministic acceptance passes.

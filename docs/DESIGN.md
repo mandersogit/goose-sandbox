@@ -45,24 +45,39 @@ Goose is launched with `--no-profile` and exactly one `--with-extension` argumen
   `AGENT_SESSION_ID` for the session-bound stdio process. Request metadata is
   authoritative; disagreement fails closed.
 - The context projector opens the isolated Goose SQLite database read-only, selects
-  one parameterized session, and emits only normalized content with current or
-  historical agent-disclosure provenance. Both MCP adapters expose the same bounded
-  `session_context` list/read tool.
-- Stock, unmodified Goose is the supported runtime. The current projector excludes
-  agent-invisible stock rows because it cannot distinguish archived former context from
-  never-disclosed content; the launcher forces tool-pair summarization off.
-- Both MCP entry points now atomically install and verify project-owned, namespaced
-  SQLite disclosure-ledger tables and triggers before starting stdio. The ledger
-  captures a managed row while it is visible and again before a visibility transition,
-  without requiring a Goose source patch.
-- The projector does not consume ledger entries yet. Archived-history recovery remains
-  fail-closed until bounded operation-pinned views and the validated stock-row/ledger
-  merge are implemented.
-- The framework-neutral operation/view types and bounded process-local
-  `SessionViewStore` are implemented with 256-bit random tokens, exact
-  session/operation/path/schema and ledger-generation binding, idle expiry, and LRU
-  count/byte limits. They remain internal until operation-aware descriptor queries and
-  the public continuation envelope are implemented.
+  one parameterized session, and emits only bounded normalized content with current
+  eligibility or valid project-ledger evidence. Goose's `agentVisible` metadata is an
+  eligibility marker, not proof of exact provider-wire disclosure. Both MCP adapters
+  expose the same bounded `session_context` list/read tool.
+- Stock, unmodified Goose is the supported runtime. Agent-invisible stock rows remain
+  ambiguous unless a valid project-ledger entry captured them while eligible. The
+  launcher force-disables tool-pair summarization as an operational default, but the
+  projection is designed and tested to tolerate its archival writes when enabled.
+- Both MCP entry points atomically install and verify project-owned, namespaced schema-v2
+  SQLite capture-ledger tables and triggers before starting stdio. Every public context
+  operation verifies the exact session, schema, accounting, coverage epoch, and
+  database/session incarnation again. There is no unprepared module-level server.
+- Ledger quota or accounting failure does not brick a stock Goose transaction. It
+  advances the coverage epoch, marks coverage incomplete, disables further capture,
+  and makes ambiguous older entries ineligible for fresh projections.
+- The schema-v3 operation projector merges valid current rows with valid
+  same-incarnation, same-epoch ledger captures. The unsupported
+  `historicallyAgentVisible` metadata field never supplies historical evidence.
+- The active ledger boundary and proportionate acceptance criteria are in the
+  [adversarial review synthesis](../dev-notes/2026-07-31-ledger-adversarial-review-synthesis.md).
+  Exact provider-wire reconstruction and arbitrary-database-writer authentication are
+  not current goals.
+- The public broker uses framework-neutral operation/view types and a bounded
+  process-local `SessionViewStore` with 256-bit random tokens, exact
+  session/operation/path/schema and ledger/database-generation binding, idle expiry,
+  and LRU count/byte limits. A client reuses `view_id` for immutable multi-chunk
+  continuations; a fresh request observes a fresh operation snapshot.
+- The schema-v3 query reads capped counts, bounded normalized descriptors, and the
+  requested manifest, transcript, recent tree, or exact physical message in one SQLite
+  snapshot. Recent discovery is a contiguous newest window of at most 256 descriptors;
+  validated exact physical-row lookup is independent of that window. Stable message
+  files omit view-relative ordinals and visibility, while descriptors and manifests
+  carry coarse eligibility evidence and explicit truncation/lower-bound state.
 - No read, write, or shell tools until a real backend is selected and tested.
 - Hostile Linux commands use an independent workspace snapshot, immutable runtime,
   offline network namespace, seccomp, cgroup limits, hard storage quotas, and reviewed
@@ -74,12 +89,13 @@ Goose is launched with `--no-profile` and exactly one `--with-extension` argumen
 - A separate context-enabled Apptainer profile and derivative SIF prove that an
   immutable in-image Python frontend can project a bounded, read-only in-memory tree
   at `/context`; the ordinary profile continues to reject FUSE mounts.
-- A trusted host exporter materializes one mode-`0600` session-scoped bundle for each
-  generation. Apptainer binds only that bundle read-only at a fixed in-image path; the
-  Goose database and unrelated sessions never enter the container.
-- The opt-in `apptainer-fuse` implementation of `session_context` regenerates that
-  bundle for every bounded read and invokes only a fixed in-image reader. The reader
-  verifies `/context` is FUSE-backed before using ordinary filesystem operations.
+- A trusted host broker materializes one mode-`0600`, operation-scoped bundle per
+  Apptainer read. Apptainer binds only that bundle read-only at a fixed in-image path;
+  the Goose database, WAL, and unrelated sessions never enter the container.
+- The opt-in `apptainer-fuse` implementation invokes only a fixed in-image reader. The
+  reader verifies `/context` is FUSE-backed before using ordinary filesystem
+  operations. Direct and Apptainer dispatch share the same pinned operation result and
+  response envelope.
 - Backend and workspace selection enter through environment variables so the stdio command stays simple.
 - The Goose CLI remains an independently installed integration dependency rather than
   vendored project content.

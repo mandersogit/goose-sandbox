@@ -4,11 +4,10 @@
 > provenance-patch experiment. New supported runs use stock, unmodified Goose and
 > force tool-pair summarization off. The driver's optional `--goose-source` input now
 > records only a clean stock checkout; it does not require or accept a locally modified
-> patch checkout. Atomic disclosure-ledger capture is now implemented and verified
-> with stock Goose, but the projector does not consume it yet. Recovery under enabled
-> summarization therefore remains unclaimed pending the operation-pinned-view and
-> ledger-backed projection work in
-> `2026-07-31-tool-pair-summarization-hardening-plan.md`.
+> patch checkout. The public operation projector now consumes valid same-epoch
+> schema-v2 ledger captures, and deterministic tests cover enabled summarization. The
+> successful live-model results below remain historical smoke evidence; they are not a
+> substitute for those deterministic controls.
 
 The sustained driver is implemented in `sandboxed_goose.live_test`. It separates two
 phases over one isolated Goose root and exact session ID; the audit phase resumes the
@@ -39,20 +38,19 @@ to Goose or its MCP subprocess.
 The `audit` phase resumes only a passed initial run. Task one selects the prior initial
 assistant reply from the trusted projection. Each later task selects the preceding
 audit assistant reply. The model must list `session/messages/by-source-row`, read that
-exact JSON file, and return its projection-only ordinal, source row ID, message ID,
-creation time, role, and visibility in a strict plain-text record. The host independently
-validates both the tool result and final record. This makes the projected filesystem
-necessary even without inducing compaction: ordinary conversation context does not
-contain those normalized projection fields.
+exact JSON file, and return its stable source row ID, message ID, creation time, and role
+in a strict plain-text record. View-relative ordinal and visibility are absent from
+schema-v3 stable files. The host independently validates both the tool result and final
+record. This makes the projected filesystem necessary even without inducing compaction:
+the task prompt does not contain those normalized projection fields.
 
 The first larger live attempt exposed a time-of-check/time-of-use problem in ordinal
 filenames: Goose's default-enabled tool-pair summarizer inserted 10 summary rows after
 the host selected a target but before the MCP read, causing the same ordinal path to
 name a different message. This was proactive per-tool history rewriting, not full
 token-threshold compaction. The projection schema now addresses message and event files
-by immutable SQLite source-row ID. `ordinal` and `contextVisibility` are intentionally
-snapshot-relative fields, so the oracle pins stable message identity while deriving
-those two values from the exact tool result observed by the model. The chained target
+by immutable SQLite source-row ID. The public schema-v3 artifact now omits the old
+snapshot-relative `ordinal` and `contextVisibility` fields entirely. The chained target
 is always the preceding audit reply, keeping it within the bounded recent-message
 projection even after truncation.
 

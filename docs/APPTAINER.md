@@ -450,25 +450,25 @@ trusted host-generated Goose session snapshot:
   manifest.json
   session/
     transcript.md
-    messages/000001.json
-    events/000001.json
+    messages/by-source-row/00000000000000000001.json
+    events/by-source-row/00000000000000000001-000000.json
 ```
 
-The host exporter opens `sessions.db` with SQLite `mode=ro` and `query_only`, uses a
-parameterized exact session ID, selects current or explicitly preserved historical
-agent-disclosure rows, applies audience filtering and byte/object limits, then
-exclusively creates a mode-`0600` UTF-8 JSON bundle. The trusted launcher binds that one
-file read-only at the fixed path. It does not bind the Goose database, its WAL, the
-Goose state root, or a directory that could reveal another session.
+The standalone whole-tree exporter opens `sessions.db` with SQLite `mode=ro` and
+`query_only`, uses a parameterized exact session ID, selects valid currently eligible
+rows, applies audience filtering and byte/object limits, then exclusively creates a
+mode-`0600` UTF-8 JSON bundle. The trusted launcher binds that one file read-only at the
+fixed path. It does not bind the Goose database, its WAL, the Goose state root, or a
+directory that could reveal another session.
 
 Stock, unmodified Goose is the supported runtime. The current exporter safely exposes
 current rows only; a stock row made agent-invisible by summarization or compaction has
-no trustworthy prior-disclosure marker and remains excluded. Project-managed launches
-therefore force tool-pair summarization off. Both MCP startup paths now atomically
-install and verify a project-owned disclosure ledger that preserves future
-prior-disclosure evidence under stock Goose. The exporter deliberately does not read
-that ledger yet; recovery under accidentally enabled summarization remains unavailable
-until operation-pinned views and ledger-backed projection are implemented. No patched
+no supported metadata-only history marker and remains excluded. The normal public
+`session_context` path is different: it verifies the schema-v2 capture ledger per
+request and projects valid same-incarnation, same-epoch captures through a bounded
+schema-v3 operation view. Its Apptainer transport exports only that pinned operation's
+minimal bundle. Project-managed launches still force tool-pair summarization off by
+default, while enabled-mode deterministic tests exercise ledger recovery. No patched
 Goose binary is part of the supported runtime.
 
 The current context-enabled SIF has SHA-256:
@@ -481,10 +481,10 @@ The integration check exercises both modes. It verifies content hashes, failed
 mutation, the exact `/dev/fd/3 -f` frontend process, absence of `/dev/fuse` and
 `fusermount3` from the payload, mount-namespace containment, and cleanup after both
 normal exit and signal termination. Its two-session fixture also proves that the
-selected session's ordinary text, pre-compaction history, tool request/result, and
-agent-only compaction summary appear while another session, user-only rows,
-audience-restricted text, thinking, `_meta`, and structured internal output do not. The ordinary
-`apptainer-hostile.conf` continues to reject the same `--fusemount` request.
+selected session's ordinary text, tool request/result, and agent-only compaction summary
+appear while unsupported metadata-only history, another session, user-only rows,
+audience-restricted text, thinking, `_meta`, and structured internal output do not. The
+ordinary `apptainer-hostile.conf` continues to reject the same `--fusemount` request.
 
 The context profile is intentionally separate:
 

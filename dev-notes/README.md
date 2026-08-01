@@ -13,6 +13,7 @@ behind choices that are too provisional or historical for the user-facing guides
 - [2026-07-31: live session-context driver](2026-07-31-live-session-context-driver.md)
 - [2026-07-31: Goose control environment policy](2026-07-31-goose-control-environment.md)
 - [2026-07-31: tool-pair summarization hardening plan](2026-07-31-tool-pair-summarization-hardening-plan.md)
+- [2026-07-31: disclosure-ledger adversarial review synthesis](2026-07-31-ledger-adversarial-review-synthesis.md)
 
 Commit records are stored in [`commit-plans/`](commit-plans/), beginning with the
 [initial commit plan](commit-plans/2026-07-30-initial-commit.yaml).

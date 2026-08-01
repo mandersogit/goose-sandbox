@@ -90,13 +90,17 @@ three namespaced tools. A second deterministic run makes Goose call
 session from Goose's SQLite store. It requires neither provider credentials nor
 internet access.
 
-For a Goose-bound process, both adapters atomically install and verify the same
-project-owned disclosure ledger in that isolated SQLite store before starting their
-stdio protocol loop. The ledger records the last disclosed form of currently visible
-rows and captures it before a later visibility transition. Missing, altered,
-incomplete, or over-quota ledger state fails startup or the corresponding Goose write
-closed. A manual MCP process without `AGENT_SESSION_ID` can still be used for tool-list
-inspection and does not touch a Goose database.
+For a normal Goose-bound process, both adapter entry points atomically install and
+verify the same project-owned capture ledger in that isolated SQLite store before
+starting their stdio protocol loop. The ledger records a bounded row form while Goose
+metadata marks the row eligible for agent context and captures it before a later
+visibility transition. This is not proof that every block reached a provider. Missing,
+altered, or inconsistent ledger state is rejected during bootstrap and revalidated for
+every `session_context` operation. Quota or accounting failure advances the coverage
+epoch, disables further capture, and hides ambiguous history without aborting the
+ordinary Goose write. A manual MCP process without `AGENT_SESSION_ID` can still be used
+for tool-list inspection; a context request still requires an exact verified ledger and
+session binding.
 
 The wrapper uses a project-local Goose root at `.sandbox/goose` by setting
 `GOOSE_PATH_ROOT`. The isolated root contains separate `config`, `data`, and `state`
@@ -159,15 +163,18 @@ image recipe are in [docs/APPTAINER.md](docs/APPTAINER.md). The rootless image h
 built and validated locally, but the Apptainer backend is not yet wired to an execution
 tool and does not enable shell execution.
 
-ContextFS now has two proven inputs. Its original deterministic toy tree exercises the
-FUSE mechanics. The session projection reads exactly the session selected by Goose's
-`agent-session-id` MCP request metadata, normalizes current and explicitly preserved
-historically agent-visible messages, and exposes a manifest, Markdown transcript,
-per-message JSON, and per-content-event JSON. The trusted host exports a mode-`0600`
-bounded bundle; only that bundle—not the Goose database—is bound read-only into
-Apptainer. A fresh projection is built for each read or sandbox launch.
+ContextFS now has two exercised inputs. Its original deterministic toy tree exercises
+the FUSE mechanics. Through the normal Goose-launched entry points, `session_context`
+reads the session selected by Goose's `agent-session-id` MCP request metadata and merges
+valid current rows with valid same-incarnation, same-epoch ledger captures. It exposes
+a bounded manifest, recent-message listing, Markdown transcript, and exact physical-row
+JSON lookup. Recent discovery is capped, while an exact validated source-row path can
+remain reachable outside that window. The experimental historical metadata field is
+not accepted. A returned `view_id` pins multi-chunk reads to one immutable operation
+snapshot. For the Apptainer transport, the trusted host exports only that operation's
+mode-`0600` bundle—not the Goose database—and binds it read-only into the container.
 
-The projection deliberately excludes rows without agent-disclosure provenance,
+The projection deliberately excludes rows without accepted eligibility evidence,
 audience-scoped user content, thinking blocks, binary payloads, provider metadata, MCP
 `_meta`, usage, cost, configuration, and all other sessions. `session_context` lets the
 agent list or read the same virtual files before the general sandboxed read/Bash tools
@@ -236,28 +243,31 @@ local.venv/bin/python -m sandboxed_goose.live_test audit \
 ```
 
 Each audit task lists `session/messages/by-source-row`, reads a host-selected message
-from prior work, and must recover `sourceRowId`, `messageId`, `createdAt`, and disclosure
-visibility—data that is present in the projected JSON but not in ordinary conversation
-messages. It returns those values in a strict plain-text record so provider tool-call
+from prior work, and must recover its stable `sourceRowId`, `messageId`, role, and
+`createdAt` values—data present in the projected JSON but not in the ordinary task
+prompt. It returns those values in a strict plain-text record so provider tool-call
 parsers cannot mistake a requested JSON object for another tool call. Task one targets
 the last initial reply; each later task targets the preceding audit reply, proving that
-the projected filesystem refreshes as work accumulates. Message paths use immutable
-SQLite source-row IDs, so Goose history compaction cannot make a path refer to a
-different message. The `ordinal` and `contextVisibility` fields remain
-snapshot-relative, and the oracle validates the exact values returned by the tool.
+fresh views track accumulating work. Message paths use immutable SQLite source-row IDs;
+view-relative ordinal and visibility fields are deliberately absent from stable files.
 
 The supported runtime contract is stock, unmodified Goose. Project-managed sessions
-now acquire prior-disclosure evidence through the atomic ledger, without changing
-Goose. The current projector deliberately does not consume that evidence until
-operation-pinned views and the ledger merge are complete, so its public stock-Goose
-output still excludes rows after they become agent-invisible. The launcher therefore
-continues to force tool-pair summarization off. The tracked provenance patch is
-retained only as historical development evidence, not as an installation or
-acceptance requirement. An internal bounded view store now provides opaque 256-bit
-tokens, exact operation and ledger-generation binding, idle expiry, and LRU resource
-limits, but it is not connected to the public MCP contract yet. The
+capture Goose agent-context eligibility evidence through schema-v2 ledger objects,
+without changing Goose. The public schema-v3 operation projector consumes valid
+same-epoch captures, verifies the ledger and database/session incarnation on every
+operation, and pins continuations with opaque 256-bit view tokens under bounded LRU
+limits. It uses capped counts and recent discovery, bounded transcript and file bytes,
+and on-demand exact physical lookup outside the recent window. Both MCP adapters share
+this implementation and response envelope; direct and Apptainer dispatch are checked
+for matching list/read/error behavior. Project-managed launches still force tool-pair
+summarization off as a defensive operational default, while deterministic enabled-mode
+tests verify that repeated archival remains recoverable. Full conversation replacement
+is handled conservatively by advancing the coverage epoch and revoking old views. The
+tracked Goose provenance patch remains historical development evidence only. The
 [hardening plan](dev-notes/2026-07-31-tool-pair-summarization-hardening-plan.md)
-records the completed capture layer and the remaining projection work.
+records the completed capture layer and the larger hardening catalog. The
+[adversarial review synthesis](dev-notes/2026-07-31-ledger-adversarial-review-synthesis.md)
+defines the narrower active milestone and its stop rule.
 
 Chronological implementation findings and local verification are recorded in
 [dev-notes](dev-notes/README.md).

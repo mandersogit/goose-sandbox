@@ -1,0 +1,66 @@
+commits:
+  - message: |
+      feat: harden bounded session eligibility capture
+
+      Evolve the project-owned disclosure ledger to schema v2 with exact
+      database and session incarnation binding, verified read snapshots,
+      bounded dynamic SQLite types, and explicit lower-bound state. Degrade
+      non-destructively when capture accounting or quotas fail so stock Goose
+      writes remain available while ambiguous history fails closed.
+    files:
+      - src/sandboxed_goose/contextfs/disclosure_ledger.py
+
+  - message: |
+      feat: expose ledger-backed session operation views
+
+      Merge valid current rows with same-incarnation, same-epoch ledger
+      captures into bounded schema-v3 projections. Add pinned recent,
+      transcript, and exact physical-row operations; stable artifacts;
+      request-bound continuations; matching direct, FastMCP, MCP SDK, and
+      Apptainer behavior; and live-driver support for physical identities.
+    files:
+      - src/sandboxed_goose/contextfs/goose_session.py
+      - src/sandboxed_goose/contextfs/operation_projection.py
+      - src/sandboxed_goose/contextfs/view_store.py
+      - src/sandboxed_goose/fastmcp/__init__.py
+      - src/sandboxed_goose/fastmcp/server.py
+      - src/sandboxed_goose/live_test.py
+      - src/sandboxed_goose/mcp_sdk/__init__.py
+      - src/sandboxed_goose/mcp_sdk/server.py
+      - src/sandboxed_goose/server.py
+      - src/sandboxed_goose/tools/session_context.py
+
+  - message: |
+      test: verify ledger-backed operation invariants
+
+      Cover schema fingerprints and migrations, database replacement,
+      session reincarnation, bounded degradation, same-snapshot concurrency,
+      stable physical lookup, pinned multi-chunk reads, adapter parity, live
+      driver behavior, and direct versus in-Apptainer FUSE projection.
+    files:
+      - scripts/test-apptainer-contextfs.sh
+      - tests/fixtures/disclosure-ledger-v2.json
+      - tests/test_disclosure_ledger.py
+      - tests/test_goose_session_projection.py
+      - tests/test_goose_tools.py
+      - tests/test_live_test.py
+      - tests/test_operation_projection.py
+      - tests/test_real_session_contextfs.py
+      - tests/test_session_view_store.py
+
+  - message: |
+      docs: record the ledger-backed projection milestone
+
+      Align the public design, Apptainer guide, live-test notes, hardening
+      status, and adversarial-review synthesis with the implemented schema-v3
+      operation contract and its deliberately bounded acceptance criteria.
+    files:
+      - README.md
+      - dev-notes/2026-07-31-goose-session-context-projection.md
+      - dev-notes/2026-07-31-ledger-adversarial-review-synthesis.md
+      - dev-notes/2026-07-31-live-session-context-driver.md
+      - dev-notes/2026-07-31-tool-pair-summarization-hardening-plan.md
+      - dev-notes/README.md
+      - dev-notes/commit-plans/2026-07-31-ledger-backed-session-operation-projection.yaml
+      - docs/APPTAINER.md
+      - docs/DESIGN.md

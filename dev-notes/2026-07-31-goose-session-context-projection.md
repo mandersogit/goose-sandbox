@@ -2,12 +2,13 @@
 
 > **Historical prototype note:** This document records the first projection and its
 > live verification, including an experimental Goose provenance patch. The supported
-> runtime contract is now stock, unmodified Goose. Project-owned ledger capture is
-> implemented for managed sessions, but the current projector does not consume it;
-> stock-Goose projections therefore still expose only currently agent-visible rows.
-> Operation-pinned views and the ledger-backed merge remain in
-> `2026-07-31-tool-pair-summarization-hardening-plan.md`. The patch remains optional
-> development evidence, not an installation, runtime, or acceptance prerequisite.
+> runtime contract is now stock, unmodified Goose. The public schema-v3 operation
+> projector consumes valid same-epoch schema-v2 ledger captures and does not accept the
+> experimental metadata field described below. See
+> `2026-07-31-ledger-adversarial-review-synthesis.md` for the current boundary. The patch
+> remains optional development evidence, not an installation, runtime, or acceptance
+> prerequisite; all behavior below is retained as a historical account of that first
+> prototype.
 
 ## Outcome
 
