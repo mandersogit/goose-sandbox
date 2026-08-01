@@ -1,8 +1,9 @@
-"""Atomic disclosure provenance for stock Goose session databases.
+"""Atomic agent-context eligibility capture for stock Goose session databases.
 
-The ledger is project-owned SQLite state. Static triggers capture the last form of a
-managed session row while stock Goose still marks it agent-visible. No trigger infers
-that an already invisible row was previously disclosed.
+The historically named disclosure ledger is project-owned SQLite state. Static triggers
+capture a bounded form of a managed row while stock Goose marks it agent-visible. That
+is eligibility evidence, not proof that every block reached a provider. No trigger
+infers that an already invisible row was previously eligible.
 """
 
 from __future__ import annotations
@@ -10,11 +11,13 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import stat
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-LEDGER_SCHEMA_VERSION: Final = 1
+LEDGER_SCHEMA_VERSION: Final = 2
 
 DEFAULT_MAX_LEDGER_ENTRIES: Final = 65_536
 DEFAULT_MAX_LEDGER_BYTES: Final = 256 * 1024 * 1024
@@ -34,6 +37,7 @@ OMITTED_MESSAGE_ID: Final = 1
 OMITTED_ROLE: Final = 2
 OMITTED_CONTENT: Final = 4
 OMITTED_METADATA: Final = 8
+OMITTED_CREATED_TIMESTAMP: Final = 16
 
 OBJECT_PREFIX: Final = "sandboxed_goose_disclosure_"
 META_TABLE: Final = "sandboxed_goose_disclosure_meta"
@@ -43,7 +47,7 @@ ACCOUNTING_TABLE: Final = "sandboxed_goose_disclosure_accounting"
 
 
 class DisclosureLedgerError(RuntimeError):
-    """The disclosure ledger cannot safely establish or verify provenance."""
+    """The ledger cannot safely establish or verify eligibility evidence."""
 
 
 class DisclosureLedgerUnavailable(DisclosureLedgerError):
@@ -86,13 +90,17 @@ class LedgerStatus:
     """Non-sensitive status for one verified managed session."""
 
     database: Path
+    database_identity: str
     session_id: str
+    session_incarnation: str
     schema_version: int
     schema_fingerprint: str
     coverage_epoch: int
     coverage_complete: bool
     coverage_reason: str
+    capture_enabled: bool
     ambiguous_rows_at_bootstrap: int
+    ambiguous_rows_at_bootstrap_is_lower_bound: bool
     deletion_events: int
     ledger_entries: int
     stored_bytes: int
@@ -110,9 +118,11 @@ def _byte_length(row: str, column: str) -> str:
 
 def _visible(row: str) -> str:
     return (
-        f"CASE WHEN json_valid({row}.metadata_json) "
+        f"CASE WHEN typeof({row}.metadata_json) = 'text' "
+        f"AND {_byte_length(row, 'metadata_json')} <= {HARD_MAX_METADATA_BYTES} "
+        f"THEN CASE WHEN json_valid({row}.metadata_json) "
         f"THEN COALESCE(json_extract({row}.metadata_json, '$.agentVisible'), 0) "
-        "ELSE 0 END = 1"
+        "ELSE 0 END ELSE 0 END = 1"
     )
 
 
@@ -123,15 +133,21 @@ def _omission_flags(row: str, managed: str) -> str:
     metadata_bytes = _byte_length(row, "metadata_json")
     return (
         f"(CASE WHEN {row}.message_id IS NOT NULL "
-        f"AND {message_id_bytes} > {managed}.max_message_id_bytes "
+        f"AND (typeof({row}.message_id) != 'text' "
+        f"OR {message_id_bytes} > {managed}.max_message_id_bytes) "
         f"THEN {OMITTED_MESSAGE_ID} ELSE 0 END) + "
-        f"(CASE WHEN {role_bytes} > {managed}.max_role_bytes "
+        f"(CASE WHEN typeof({row}.role) != 'text' "
+        f"OR {role_bytes} > {managed}.max_role_bytes "
         f"THEN {OMITTED_ROLE} ELSE 0 END) + "
-        f"(CASE WHEN {content_bytes} > {managed}.max_content_bytes "
+        f"(CASE WHEN typeof({row}.content_json) != 'text' "
+        f"OR {content_bytes} > {managed}.max_content_bytes "
         f"THEN {OMITTED_CONTENT} ELSE 0 END) + "
         f"(CASE WHEN {row}.metadata_json IS NOT NULL "
-        f"AND {metadata_bytes} > {managed}.max_metadata_bytes "
-        f"THEN {OMITTED_METADATA} ELSE 0 END)"
+        f"AND (typeof({row}.metadata_json) != 'text' "
+        f"OR {metadata_bytes} > {managed}.max_metadata_bytes) "
+        f"THEN {OMITTED_METADATA} ELSE 0 END) + "
+        f"(CASE WHEN typeof({row}.created_timestamp) != 'integer' "
+        f"THEN {OMITTED_CREATED_TIMESTAMP} ELSE 0 END)"
     )
 
 
@@ -145,6 +161,7 @@ def _stored_bytes(row: str, managed: str) -> str:
     terms = [
         (
             f"CASE WHEN {row}.{column} IS NOT NULL "
+            f"AND typeof({row}.{column}) = 'text' "
             f"AND {_byte_length(row, column)} <= {managed}.{limit_column} "
             f"THEN {_byte_length(row, column)} ELSE 0 END"
         )
@@ -156,8 +173,16 @@ def _stored_bytes(row: str, managed: str) -> str:
 def _bounded_value(row: str, column: str, managed: str, limit_column: str) -> str:
     return (
         f"CASE WHEN {row}.{column} IS NULL THEN NULL "
-        f"WHEN {_byte_length(row, column)} <= {managed}.{limit_column} "
+        f"WHEN typeof({row}.{column}) = 'text' "
+        f"AND {_byte_length(row, column)} <= {managed}.{limit_column} "
         f"THEN {row}.{column} ELSE NULL END"
+    )
+
+
+def _bounded_timestamp(row: str) -> str:
+    return (
+        f"CASE WHEN typeof({row}.created_timestamp) = 'integer' "
+        f"THEN {row}.created_timestamp ELSE NULL END"
     )
 
 
@@ -190,17 +215,17 @@ def _capture_statement(row: str, reason: str, *, seed: bool = False) -> str:
             {row}.session_id,
             managed.coverage_epoch,
             {row}.id,
-            {_bounded_value(row, 'message_id', 'managed', 'max_message_id_bytes')},
-            {_bounded_value(row, 'role', 'managed', 'max_role_bytes')},
-            {row}.created_timestamp,
-            {_bounded_value(row, 'content_json', 'managed', 'max_content_bytes')},
-            {_bounded_value(row, 'metadata_json', 'managed', 'max_metadata_bytes')},
+            {_bounded_value(row, "message_id", "managed", "max_message_id_bytes")},
+            {_bounded_value(row, "role", "managed", "max_role_bytes")},
+            {_bounded_timestamp(row)},
+            {_bounded_value(row, "content_json", "managed", "max_content_bytes")},
+            {_bounded_value(row, "metadata_json", "managed", "max_metadata_bytes")},
             {message_id_bytes},
             {role_bytes},
             {content_bytes},
             {metadata_bytes},
-            {_stored_bytes(row, 'managed')},
-            {_omission_flags(row, 'managed')},
+            {_stored_bytes(row, "managed")},
+            {_omission_flags(row, "managed")},
             '{reason}',
             {LEDGER_SCHEMA_VERSION}
         {source}
@@ -239,11 +264,14 @@ _TABLE_DEFINITIONS: Final[dict[str, str]] = {
             coverage_reason TEXT NOT NULL CHECK (
                 coverage_reason IN (
                     'bootstrap-complete', 'preexisting-ambiguous-rows',
-                    'message-delete', 'message-session-move', 'session-delete'
+                    'message-delete', 'message-session-move', 'session-delete',
+                    'capture-overflow', 'capture-unavailable'
                 )
             ),
             ambiguous_rows_at_bootstrap INTEGER NOT NULL
                 CHECK (ambiguous_rows_at_bootstrap >= 0),
+            ambiguous_rows_at_bootstrap_is_lower_bound INTEGER NOT NULL
+                CHECK (ambiguous_rows_at_bootstrap_is_lower_bound IN (0, 1)),
             deletion_events INTEGER NOT NULL DEFAULT 0 CHECK (deletion_events >= 0),
             max_entries INTEGER NOT NULL
                 CHECK (max_entries BETWEEN 1 AND {HARD_MAX_LEDGER_ENTRIES}),
@@ -266,7 +294,7 @@ _TABLE_DEFINITIONS: Final[dict[str, str]] = {
             source_row_id INTEGER NOT NULL CHECK (source_row_id >= 1),
             message_id TEXT,
             role TEXT,
-            created_timestamp INTEGER NOT NULL,
+            created_timestamp INTEGER,
             content_json TEXT,
             metadata_json TEXT,
             source_message_id_bytes INTEGER NOT NULL CHECK (source_message_id_bytes >= 0),
@@ -274,7 +302,7 @@ _TABLE_DEFINITIONS: Final[dict[str, str]] = {
             source_content_bytes INTEGER NOT NULL CHECK (source_content_bytes >= 0),
             source_metadata_bytes INTEGER NOT NULL CHECK (source_metadata_bytes >= 0),
             stored_bytes INTEGER NOT NULL CHECK (stored_bytes >= 0),
-            omission_flags INTEGER NOT NULL CHECK (omission_flags BETWEEN 0 AND 15),
+            omission_flags INTEGER NOT NULL CHECK (omission_flags BETWEEN 0 AND 31),
             capture_reason TEXT NOT NULL CHECK (
                 capture_reason IN ('bootstrap', 'visible-insert', 'visible-update', 'pre-archive')
             ),
@@ -301,12 +329,37 @@ _TRIGGER_DEFINITIONS: Final[dict[str, str]] = {
         BEFORE INSERT ON {ENTRY_TABLE}
         BEGIN
             SELECT CASE WHEN NOT EXISTS (
-                SELECT 1 FROM {MANAGED_TABLE} AS managed
-                JOIN {ACCOUNTING_TABLE} AS accounting
-                    ON accounting.session_id = managed.session_id
-                WHERE managed.session_id = NEW.session_id
+                SELECT 1 FROM {MANAGED_TABLE}
+                WHERE session_id = NEW.session_id
             ) THEN RAISE(ABORT, 'sandboxed_goose_ledger_unavailable') END;
+
+            UPDATE {MANAGED_TABLE} AS managed
+            SET coverage_epoch = coverage_epoch + 1,
+                coverage_complete = 0,
+                coverage_reason = 'capture-unavailable'
+            WHERE managed.session_id = NEW.session_id
+              AND managed.coverage_reason NOT IN (
+                  'capture-overflow', 'capture-unavailable'
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM {ACCOUNTING_TABLE} AS accounting
+                  WHERE accounting.session_id = NEW.session_id
+              );
             SELECT CASE WHEN EXISTS (
+                SELECT 1 FROM {MANAGED_TABLE}
+                WHERE session_id = NEW.session_id
+                  AND coverage_reason = 'capture-unavailable'
+            ) THEN RAISE(IGNORE) END;
+
+            UPDATE {MANAGED_TABLE} AS managed
+            SET coverage_epoch = coverage_epoch + 1,
+                coverage_complete = 0,
+                coverage_reason = 'capture-overflow'
+            WHERE managed.session_id = NEW.session_id
+              AND managed.coverage_reason NOT IN (
+                  'capture-overflow', 'capture-unavailable'
+              )
+              AND EXISTS (
                 SELECT 1 FROM {MANAGED_TABLE} AS managed
                 JOIN {ACCOUNTING_TABLE} AS accounting
                     ON accounting.session_id = managed.session_id
@@ -326,7 +379,12 @@ _TRIGGER_DEFINITIONS: Final[dict[str, str]] = {
                       ), 0)
                           > managed.max_stored_bytes
                   )
-            ) THEN RAISE(ABORT, 'sandboxed_goose_ledger_overflow') END;
+              );
+            SELECT CASE WHEN EXISTS (
+                SELECT 1 FROM {MANAGED_TABLE}
+                WHERE session_id = NEW.session_id
+                  AND coverage_reason = 'capture-overflow'
+            ) THEN RAISE(IGNORE) END;
         END
     """,
     "sandboxed_goose_disclosure_entry_insert_account": f"""
@@ -345,25 +403,51 @@ _TRIGGER_DEFINITIONS: Final[dict[str, str]] = {
         CREATE TRIGGER sandboxed_goose_disclosure_entry_update_quota
         BEFORE UPDATE ON {ENTRY_TABLE}
         BEGIN
-            SELECT CASE WHEN NOT EXISTS (
-                SELECT 1 FROM {MANAGED_TABLE} AS managed
-                JOIN {ACCOUNTING_TABLE} AS accounting
-                    ON accounting.session_id = managed.session_id
-                WHERE managed.session_id = NEW.session_id
-            ) THEN RAISE(ABORT, 'sandboxed_goose_ledger_unavailable') END;
             SELECT CASE WHEN
                 NEW.session_id != OLD.session_id
                 OR NEW.coverage_epoch != OLD.coverage_epoch
                 OR NEW.source_row_id != OLD.source_row_id
             THEN RAISE(ABORT, 'sandboxed_goose_ledger_identity_immutable') END;
+
+            UPDATE {MANAGED_TABLE} AS managed
+            SET coverage_epoch = coverage_epoch + 1,
+                coverage_complete = 0,
+                coverage_reason = 'capture-unavailable'
+            WHERE managed.session_id = NEW.session_id
+              AND managed.coverage_reason NOT IN (
+                  'capture-overflow', 'capture-unavailable'
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM {ACCOUNTING_TABLE} AS accounting
+                  WHERE accounting.session_id = NEW.session_id
+              );
             SELECT CASE WHEN EXISTS (
+                SELECT 1 FROM {MANAGED_TABLE}
+                WHERE session_id = NEW.session_id
+                  AND coverage_reason = 'capture-unavailable'
+            ) THEN RAISE(IGNORE) END;
+
+            UPDATE {MANAGED_TABLE} AS managed
+            SET coverage_epoch = coverage_epoch + 1,
+                coverage_complete = 0,
+                coverage_reason = 'capture-overflow'
+            WHERE managed.session_id = NEW.session_id
+              AND managed.coverage_reason NOT IN (
+                  'capture-overflow', 'capture-unavailable'
+              )
+              AND EXISTS (
                 SELECT 1 FROM {MANAGED_TABLE} AS managed
                 JOIN {ACCOUNTING_TABLE} AS accounting
                     ON accounting.session_id = managed.session_id
                 WHERE managed.session_id = NEW.session_id
                   AND accounting.stored_bytes - OLD.stored_bytes + NEW.stored_bytes
                       > managed.max_stored_bytes
-            ) THEN RAISE(ABORT, 'sandboxed_goose_ledger_overflow') END;
+              );
+            SELECT CASE WHEN EXISTS (
+                SELECT 1 FROM {MANAGED_TABLE}
+                WHERE session_id = NEW.session_id
+                  AND coverage_reason = 'capture-overflow'
+            ) THEN RAISE(IGNORE) END;
         END
     """,
     "sandboxed_goose_disclosure_entry_update_account": f"""
@@ -382,43 +466,49 @@ _TRIGGER_DEFINITIONS: Final[dict[str, str]] = {
         CREATE TRIGGER sandboxed_goose_disclosure_entry_no_delete
         BEFORE DELETE ON {ENTRY_TABLE}
         BEGIN
-            SELECT RAISE(ABORT, 'sandboxed_goose_ledger_append_only');
+            SELECT RAISE(ABORT, 'sandboxed_goose_ledger_entry_delete_forbidden');
         END
     """,
     "sandboxed_goose_disclosure_visible_insert": f"""
         CREATE TRIGGER sandboxed_goose_disclosure_visible_insert
         AFTER INSERT ON messages
-        WHEN {_visible('NEW')}
+        WHEN {_visible("NEW")}
           AND EXISTS (
-              SELECT 1 FROM {MANAGED_TABLE} WHERE session_id = NEW.session_id
+              SELECT 1 FROM {MANAGED_TABLE}
+              WHERE session_id = NEW.session_id
+                AND coverage_reason NOT IN ('capture-overflow', 'capture-unavailable')
           )
         BEGIN
-            {_capture_statement('NEW', 'visible-insert')}
+            {_capture_statement("NEW", "visible-insert")}
         END
     """,
     "sandboxed_goose_disclosure_visible_update": f"""
         CREATE TRIGGER sandboxed_goose_disclosure_visible_update
         AFTER UPDATE OF message_id, session_id, role, content_json,
                         created_timestamp, metadata_json ON messages
-        WHEN {_visible('NEW')}
+        WHEN {_visible("NEW")}
           AND EXISTS (
-              SELECT 1 FROM {MANAGED_TABLE} WHERE session_id = NEW.session_id
+              SELECT 1 FROM {MANAGED_TABLE}
+              WHERE session_id = NEW.session_id
+                AND coverage_reason NOT IN ('capture-overflow', 'capture-unavailable')
           )
         BEGIN
-            {_capture_statement('NEW', 'visible-update')}
+            {_capture_statement("NEW", "visible-update")}
         END
     """,
     "sandboxed_goose_disclosure_pre_archive": f"""
         CREATE TRIGGER sandboxed_goose_disclosure_pre_archive
         BEFORE UPDATE OF session_id, metadata_json ON messages
         WHEN OLD.session_id = NEW.session_id
-          AND {_visible('OLD')}
-          AND NOT ({_visible('NEW')})
+          AND {_visible("OLD")}
+          AND NOT ({_visible("NEW")})
           AND EXISTS (
-              SELECT 1 FROM {MANAGED_TABLE} WHERE session_id = OLD.session_id
+              SELECT 1 FROM {MANAGED_TABLE}
+              WHERE session_id = OLD.session_id
+                AND coverage_reason NOT IN ('capture-overflow', 'capture-unavailable')
           )
         BEGIN
-            {_capture_statement('OLD', 'pre-archive')}
+            {_capture_statement("OLD", "pre-archive")}
         END
     """,
     "sandboxed_goose_disclosure_message_delete": f"""
@@ -491,6 +581,7 @@ def bootstrap_disclosure_ledger(
 
     active_limits = limits if limits is not None else LedgerLimits()
     resolved = _resolve_database(database)
+    database_identity = _database_identity(resolved)
     _validate_session_id(session_id)
     connection: sqlite3.Connection | None = None
     installed = False
@@ -500,6 +591,7 @@ def bootstrap_disclosure_ledger(
         connection.execute("PRAGMA busy_timeout = 2000")
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("BEGIN IMMEDIATE")
+        _require_database_identity(resolved, database_identity)
         _validate_stock_schema(connection)
         owned = _read_owned_objects(connection)
         if not owned:
@@ -516,7 +608,12 @@ def bootstrap_disclosure_ledger(
             _register_session(connection, session_id, active_limits)
         else:
             _require_limits(managed, active_limits)
-        status = _read_status(connection, resolved, session_id)
+        status = _read_status(
+            connection,
+            resolved,
+            database_identity,
+            session_id,
+        )
         connection.commit()
         return status
     except DisclosureLedgerError:
@@ -540,7 +637,23 @@ def bootstrap_disclosure_ledger(
 def verify_disclosure_ledger(database: Path, session_id: str) -> LedgerStatus:
     """Verify all owned objects and accounting without repairing any state."""
 
+    with open_verified_disclosure_snapshot(database, session_id) as (_connection, status):
+        return status
+
+
+@contextmanager
+def open_verified_disclosure_snapshot(
+    database: Path,
+    session_id: str,
+) -> Iterator[tuple[sqlite3.Connection, LedgerStatus]]:
+    """Open one read transaction with the exact session and ledger verified.
+
+    The yielded connection observes the same SQLite snapshot as the returned status.
+    Consumers must not commit it or retain it beyond the context manager.
+    """
+
     resolved = _resolve_database(database)
+    database_identity = _database_identity(resolved)
     _validate_session_id(session_id)
     connection: sqlite3.Connection | None = None
     try:
@@ -549,19 +662,39 @@ def verify_disclosure_ledger(database: Path, session_id: str) -> LedgerStatus:
         connection.execute("PRAGMA query_only = ON")
         connection.execute("PRAGMA busy_timeout = 1000")
         connection.execute("BEGIN")
+        _require_database_identity(resolved, database_identity)
         _validate_stock_schema(connection)
         _verify_schema_objects(_read_owned_objects(connection))
         _verify_meta(connection)
         _require_session(connection, session_id)
-        status = _read_status(connection, resolved, session_id)
-        connection.rollback()
-        return status
+        status = _read_status(
+            connection,
+            resolved,
+            database_identity,
+            session_id,
+        )
     except DisclosureLedgerError:
+        if connection is not None:
+            connection.close()
         raise
     except (OSError, sqlite3.Error) as error:
-        raise DisclosureLedgerUnavailable(f"cannot verify disclosure ledger: {error}") from error
-    finally:
         if connection is not None:
+            connection.close()
+        raise DisclosureLedgerUnavailable(f"cannot verify disclosure ledger: {error}") from error
+    except BaseException:
+        if connection is not None:
+            connection.close()
+        raise
+
+    if connection is None:  # pragma: no cover - established by the successful setup path
+        raise AssertionError("verified disclosure snapshot has no SQLite connection")
+    try:
+        yield connection, status
+    finally:
+        try:
+            if connection.in_transaction:
+                connection.rollback()
+        finally:
             connection.close()
 
 
@@ -570,10 +703,34 @@ def _resolve_database(database: Path) -> Path:
         resolved = database.expanduser().resolve(strict=True)
         details = resolved.stat()
     except OSError as error:
-        raise DisclosureLedgerUnavailable(f"cannot inspect Goose session database: {error}") from error
+        raise DisclosureLedgerUnavailable(
+            f"cannot inspect Goose session database: {error}"
+        ) from error
     if not stat.S_ISREG(details.st_mode):
         raise DisclosureLedgerUnavailable("Goose session database is not a regular file")
     return resolved
+
+
+def _database_identity(database: Path) -> str:
+    """Return a process-comparable identity that changes on atomic DB replacement."""
+
+    try:
+        details = database.stat()
+    except OSError as error:
+        raise DisclosureLedgerUnavailable(
+            f"cannot inspect Goose session database identity: {error}"
+        ) from error
+    if not stat.S_ISREG(details.st_mode):
+        raise DisclosureLedgerUnavailable("Goose session database is not a regular file")
+    basis = f"{details.st_dev}\0{details.st_ino}".encode("ascii")
+    return hashlib.sha256(basis).hexdigest()
+
+
+def _require_database_identity(database: Path, expected: str) -> None:
+    if _database_identity(database) != expected:
+        raise DisclosureLedgerUnavailable(
+            "Goose session database was replaced while establishing a verified snapshot"
+        )
 
 
 def _validate_session_id(session_id: str) -> None:
@@ -640,9 +797,7 @@ def _read_owned_objects(connection: sqlite3.Connection) -> dict[str, tuple[str, 
         """,
         (f"{OBJECT_PREFIX}*",),
     ).fetchall()
-    return {
-        str(row["name"]): (str(row["type"]), str(row["sql"] or "")) for row in rows
-    }
+    return {str(row["name"]): (str(row["type"]), str(row["sql"] or "")) for row in rows}
 
 
 def _create_schema(connection: sqlite3.Connection) -> None:
@@ -702,22 +857,27 @@ def _register_session(
     ambiguous_rows = int(
         connection.execute(
             f"""
-            SELECT count(*) FROM messages
-            WHERE session_id = ? AND NOT ({_visible('messages')})
+            SELECT count(*) FROM (
+                SELECT 1 FROM messages
+                WHERE session_id = ? AND NOT ({_visible("messages")})
+                LIMIT ?
+            )
             """,
-            (session_id,),
+            (session_id, limits.max_entries + 1),
         ).fetchone()[0]
     )
+    ambiguous_rows_is_lower_bound = int(ambiguous_rows > limits.max_entries)
     complete = int(ambiguous_rows == 0)
     reason = "bootstrap-complete" if complete else "preexisting-ambiguous-rows"
     connection.execute(
         f"""
         INSERT INTO {MANAGED_TABLE} (
             session_id, ledger_schema_version, coverage_epoch, coverage_complete,
-            coverage_reason, ambiguous_rows_at_bootstrap, deletion_events,
+            coverage_reason, ambiguous_rows_at_bootstrap,
+            ambiguous_rows_at_bootstrap_is_lower_bound, deletion_events,
             max_entries, max_stored_bytes, max_content_bytes, max_metadata_bytes,
             max_message_id_bytes, max_role_bytes
-        ) VALUES (?, ?, 1, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, 1, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
         """,
         (
             session_id,
@@ -725,6 +885,7 @@ def _register_session(
             complete,
             reason,
             ambiguous_rows,
+            ambiguous_rows_is_lower_bound,
             limits.max_entries,
             limits.max_stored_bytes,
             limits.max_content_bytes,
@@ -758,7 +919,10 @@ def _require_limits(row: sqlite3.Row, limits: LedgerLimits) -> None:
 
 
 def _read_status(
-    connection: sqlite3.Connection, database: Path, session_id: str
+    connection: sqlite3.Connection,
+    database: Path,
+    database_identity: str,
+    session_id: str,
 ) -> LedgerStatus:
     row = connection.execute(
         f"""
@@ -801,9 +965,7 @@ def _read_status(
     if actual_accounting != expected_accounting:
         raise DisclosureLedgerUnavailable("disclosure ledger accounting mismatch")
     coverage_epoch = int(row["coverage_epoch"])
-    if int(aggregate["maximum_epoch"]) > coverage_epoch or int(
-        aggregate["wrong_schema_entries"]
-    ):
+    if int(aggregate["maximum_epoch"]) > coverage_epoch or int(aggregate["wrong_schema_entries"]):
         raise DisclosureLedgerUnavailable("disclosure ledger entry state is invalid")
     limits = LedgerLimits(
         max_entries=int(row["max_entries"]),
@@ -819,13 +981,21 @@ def _read_status(
         raise DisclosureLedgerUnavailable("disclosure ledger accounting exceeds its limits")
     return LedgerStatus(
         database=database,
+        database_identity=database_identity,
         session_id=session_id,
+        session_incarnation=hashlib.sha256(
+            (f"{database_identity}\0{session_id}\0{coverage_epoch}").encode()
+        ).hexdigest(),
         schema_version=LEDGER_SCHEMA_VERSION,
         schema_fingerprint=SCHEMA_FINGERPRINT,
         coverage_epoch=coverage_epoch,
         coverage_complete=bool(row["coverage_complete"]),
         coverage_reason=str(row["coverage_reason"]),
+        capture_enabled=row["coverage_reason"] not in {"capture-overflow", "capture-unavailable"},
         ambiguous_rows_at_bootstrap=int(row["ambiguous_rows_at_bootstrap"]),
+        ambiguous_rows_at_bootstrap_is_lower_bound=bool(
+            row["ambiguous_rows_at_bootstrap_is_lower_bound"]
+        ),
         deletion_events=int(row["deletion_events"]),
         ledger_entries=actual_accounting[0],
         stored_bytes=actual_accounting[1],
