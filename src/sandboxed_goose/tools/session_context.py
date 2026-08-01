@@ -43,6 +43,7 @@ SESSION_CONTEXT = ToolDefinition(
         "calculating an offset; tail cannot be combined with a nonzero offset."
     ),
 )
+_DEFAULT_VIEW_STORE = SessionViewStore()
 
 
 def render_session_context(
@@ -64,7 +65,7 @@ def render_session_context(
         )
     normalized_path = normalize_requested_path(path)
     request = _operation_request(session_id, normalized_path)
-    active_store = view_store if view_store is not None else SessionViewStore()
+    active_store = view_store if view_store is not None else _DEFAULT_VIEW_STORE
     reused = view_id is not None
     if view_id is None:
         result = query_session_operation_descriptors(settings.session_database, request)

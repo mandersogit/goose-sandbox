@@ -735,7 +735,15 @@ def _projection_report(
     if forbidden_marker in combined:
         raise LiveTestError("the trusted fresh projection disclosed the decoy marker")
     source_rows = _require_int(manifest.get("source_message_rows"), "source_message_rows")
-    if source_rows <= previous_source_rows:
+    raw_lower_bounds = manifest.get("count_lower_bounds")
+    if not isinstance(raw_lower_bounds, list) or not all(
+        isinstance(value, str) for value in raw_lower_bounds
+    ):
+        raise LiveTestError("trusted projection count_lower_bounds has an invalid shape")
+    source_rows_is_lower_bound = "source_message_rows" in raw_lower_bounds
+    if source_rows < previous_source_rows or (
+        source_rows == previous_source_rows and not source_rows_is_lower_bound
+    ):
         raise LiveTestError("the primary session source row count did not increase")
     if previous_snapshot_id is not None and projection.snapshot_id == previous_snapshot_id:
         raise LiveTestError("the primary session projection snapshot did not advance")
@@ -744,6 +752,7 @@ def _projection_report(
     return {
         "snapshot_id": projection.snapshot_id,
         "source_message_rows": source_rows,
+        "source_message_rows_is_lower_bound": source_rows_is_lower_bound,
         "projected_messages": manifest.get("projected_messages"),
         "projected_events": manifest.get("projected_events"),
         "truncated": manifest.get("truncated"),

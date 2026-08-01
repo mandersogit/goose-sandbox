@@ -7,6 +7,9 @@ from typing import Any
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
+from mcp.server.mcpserver.exceptions import ToolError
+from mcp_types import CallToolResult, InputRequiredResult
+from mcp_types import Tool as MCPTool
 
 from sandboxed_goose import __version__
 from sandboxed_goose.config import Settings
@@ -23,11 +26,45 @@ from sandboxed_goose.tools import (
 )
 
 
+class _StrictMCPServer(MCPServer[dict[str, Any]]):
+    """Close the pinned SDK's permissive-extra argument gap."""
+
+    async def list_tools(self) -> list[MCPTool]:
+        tools = await super().list_tools()
+        return [
+            tool.model_copy(
+                update={
+                    "input_schema": {
+                        **tool.input_schema,
+                        "additionalProperties": False,
+                    }
+                }
+            )
+            for tool in tools
+        ]
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        context: Context[dict[str, Any], Any] | None = None,
+    ) -> CallToolResult | InputRequiredResult:
+        tools = {tool.name: tool for tool in await self.list_tools()}
+        tool = tools.get(name)
+        if tool is not None:
+            properties = tool.input_schema.get("properties", {})
+            allowed = set(properties) if isinstance(properties, dict) else set()
+            unexpected = sorted(set(arguments) - allowed)
+            if unexpected:
+                raise ToolError(f"Unexpected tool arguments: {unexpected}")
+        return await super().call_tool(name, arguments, context)
+
+
 def build_server(settings: Settings | None = None) -> MCPServer[dict[str, Any]]:
     """Build the fail-closed server using the official MCP SDK."""
     active_settings = settings if settings is not None else Settings.from_environment()
     view_store = SessionViewStore()
-    server: MCPServer[dict[str, Any]] = MCPServer(
+    server: MCPServer[dict[str, Any]] = _StrictMCPServer(
         SERVER_NAME,
         version=__version__,
         instructions=SERVER_INSTRUCTIONS,

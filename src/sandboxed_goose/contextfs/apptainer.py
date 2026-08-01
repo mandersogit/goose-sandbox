@@ -236,7 +236,10 @@ def _validate_response(encoded: bytes, path: str, offset: int, limit: int) -> st
             or not isinstance(size, int)
             or isinstance(size, bool)
             or size < 0
-            or offset > size
+            or offset >= size
+            and (bool(content_bytes) or next_offset is not None)
+            or offset < size
+            and content_end > size
             or (
                 next_offset is not None
                 and (
@@ -248,6 +251,7 @@ def _validate_response(encoded: bytes, path: str, offset: int, limit: int) -> st
                 )
             )
             or next_offset is None
+            and offset < size
             and content_end < size
         ):
             raise ProjectionError("Apptainer ContextFS reader returned invalid file bounds")
