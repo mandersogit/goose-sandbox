@@ -1,0 +1,15 @@
+commits:
+  - message: |
+      docs: design a Bubblewrap approximation of Apptainer
+
+      Record a high-level system design for an sgbox runtime that rebuilds
+      the Apptainer surface this project actually uses on Bubblewrap plus
+      unprivileged helpers: SquashFS images with embedded metadata,
+      range-namespace rootless builds, squashfuse roots, systemd transient
+      scopes, a stage-0 init, and a separated ContextFS FUSE frontend.
+      Cover flag mapping, integration seams, preflight, acceptance gates,
+      deliberate divergences, and open questions.
+    files:
+      - dev-notes/2026-08-04-bubblewrap-apptainer-approximation-design.md
+      - dev-notes/README.md
+      - dev-notes/commit-plans/2026-08-04-bubblewrap-apptainer-approximation-design.yaml

@@ -15,6 +15,7 @@ behind choices that are too provisional or historical for the user-facing guides
 - [2026-07-31: tool-pair summarization hardening plan](2026-07-31-tool-pair-summarization-hardening-plan.md)
 - [2026-07-31: disclosure-ledger adversarial review synthesis](2026-07-31-ledger-adversarial-review-synthesis.md)
 - [2026-07-31: ledger and operation-view follow-up adversarial review](2026-07-31-ledger-follow-up-adversarial-review.md)
+- [2026-08-04: approximating Apptainer with Bubblewrap — system design](2026-08-04-bubblewrap-apptainer-approximation-design.md)
 
 Commit records are stored in [`commit-plans/`](commit-plans/), beginning with the
 [initial commit plan](commit-plans/2026-07-30-initial-commit.yaml).
